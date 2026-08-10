@@ -139,7 +139,7 @@
     <div class="cards" id="summaryCards"></div>
 
     <div class="section-title">
-      <h2>학기 누적 연차 결론<span>월 필터와 무관하게 업로드된 전체 기간 기준으로 계산됩니다</span></h2>
+      <h2 id="conclusionTitle">인원별 근태 현황<span>정상출근일~출석률은 선택한 기간 기준, 배정연차·잔여/초과·소진율·결론은 항상 학기 전체 누적 기준</span></h2>
     </div>
     <table>
       <thead>
@@ -380,12 +380,32 @@ function computeMonthlyStats(nameOrder){
   return out;
 }
 
+// 인원별 표시용 row: 카운트 컬럼(정상출근일/연차/반차/출장/실질소진/출석률)은 선택 스코프(전체 or 특정월) 기준,
+// 배정연차/잔여·초과/소진율/결론은 항상 학기 전체 누적 기준
+function computePersonRows(){
+  const cumulative = computeConclusionStats(); // quota/remain/rate/status는 여기서 고정
+  if(currentMonth==='전체') return cumulative;
+
+  const scoped = cumulative.map(c=>{
+    const rows = rawRows.filter(r=>r.name===c.name && r.month===currentMonth);
+    const s = statFromRows(rows); // normalDays/leaveFull/leaveHalf/trip/consumed/attendRate만 덮어씀
+    return {...c, ...s};
+  });
+  scoped.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
+  return scoped;
+}
+
 function render(){
   const conclusion = computeConclusionStats();
   const monthly = computeMonthlyStats(conclusion.map(s=>s.name));
   renderCards(conclusion, monthly);
-  renderConclusion(conclusion);
+  renderConclusion(computePersonRows());
   renderMonthly(monthly);
+  const titleEl = document.getElementById('conclusionTitle');
+  if(titleEl){
+    const scopeText = currentMonth==='전체' ? '전체 기간' : currentMonth;
+    titleEl.innerHTML = `인원별 근태 현황 (${scopeText})<span>정상출근일~출석률은 선택한 기간 기준, 배정연차·잔여/초과·소진율·결론은 항상 학기 전체 누적 기준</span>`;
+  }
 }
 
 function renderCards(conclusion, monthly){
@@ -507,16 +527,17 @@ document.getElementById('downloadImageBtn').addEventListener('click', ()=>{
 document.getElementById('downloadBtn').addEventListener('click', ()=>{
   const conclusion = computeConclusionStats();
   const monthly = computeMonthlyStats(conclusion.map(s=>s.name));
+  const personRows = computePersonRows();
   const wb = XLSX.utils.book_new();
 
-  const conclusionData = conclusion.map(s=>({
+  const conclusionData = personRows.map(s=>({
     '이름': s.name, '과정': s.degree, '출석률(%)': Math.round(s.attendRate*100),
     '정상출근일': s.normalDays,
     '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip,
-    '실질 소진': s.consumed, '배정연차': s.quota, '잔여/초과': s.remain,
-    '소진율(%)': Math.round(s.rate*100), '결론': s.statusLabel
+    '실질 소진': s.consumed, '배정연차(학기누적)': s.quota, '잔여/초과(학기누적)': s.remain,
+    '소진율(%)(학기누적)': Math.round(s.rate*100), '결론(학기누적)': s.statusLabel
   }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conclusionData), '학기누적결론');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conclusionData), `인원별근태_${currentMonth}`.slice(0,31));
 
   const monthlyData = monthly.map(r=>({
     '이름': r.name, '월': r.month, '출석률(%)': Math.round(r.attendRate*100),
