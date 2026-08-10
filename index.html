@@ -382,24 +382,29 @@ function computeMonthlyStats(nameOrder){
 
 function render(){
   const conclusion = computeConclusionStats();
-  renderCards(conclusion);
+  const monthly = computeMonthlyStats(conclusion.map(s=>s.name));
+  renderCards(conclusion, monthly);
   renderConclusion(conclusion);
-  renderMonthly(computeMonthlyStats(conclusion.map(s=>s.name)));
+  renderMonthly(monthly);
 }
 
-function renderCards(stats){
-  const totalPeople = stats.length;
-  const overCount = stats.filter(s=>s.status==='over').length;
-  const warnCount = stats.filter(s=>s.status==='warn').length;
-  const avgAttend = stats.length ? (stats.reduce((a,s)=>a+s.attendRate,0)/stats.length*100).toFixed(0) : 0;
-  const totalTrip = stats.reduce((a,s)=>a+s.trip,0);
+function renderCards(conclusion, monthly){
+  const totalPeople = conclusion.length;
+  const overCount = conclusion.filter(s=>s.status==='over').length;
+  const warnCount = conclusion.filter(s=>s.status==='warn').length;
+
+  // 평균 출석률 / 출장 건수는 선택된 스코프(전체 or 특정 월)에 맞춰 계산
+  const scopeStats = currentMonth==='전체' ? conclusion : monthly;
+  const avgAttend = scopeStats.length ? (scopeStats.reduce((a,s)=>a+s.attendRate,0)/scopeStats.length*100).toFixed(0) : 0;
+  const scopeTrip = scopeStats.reduce((a,s)=>a+s.trip,0);
+  const scopeLabel = currentMonth==='전체' ? '(전체기간)' : `(${currentMonth})`;
 
   const cards = [
     {label:'집계 대상 인원', value:`${totalPeople}명`},
-    {label:'배정연차 초과', value:`${overCount}명`, cls: overCount>0?'red':''},
-    {label:'소진 임박(70%↑)', value:`${warnCount}명`, cls: warnCount>0?'amber':''},
-    {label:'평균 출석률', value:`${avgAttend}%`},
-    {label:'출장 인정 건수(제외)', value:`${totalTrip}건`},
+    {label:'배정연차 초과 (학기누적)', value:`${overCount}명`, cls: overCount>0?'red':''},
+    {label:'소진 임박 (학기누적,70%↑)', value:`${warnCount}명`, cls: warnCount>0?'amber':''},
+    {label:`평균 출석률 ${scopeLabel}`, value:`${avgAttend}%`},
+    {label:`출장 인정 건수(제외) ${scopeLabel}`, value:`${scopeTrip}건`},
   ];
   document.getElementById('summaryCards').innerHTML = cards.map(c=>`
     <div class="card">
