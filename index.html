@@ -99,6 +99,7 @@
   .conclusion-pill.ok{background:var(--green-soft); color:var(--green);}
   .conclusion-pill.warn{background:var(--amber-soft); color:var(--amber);}
   .conclusion-pill.over{background:var(--red-soft); color:var(--red);}
+  .config-warn{font-size:10px; color:var(--amber); margin-top:3px; font-weight:600;}
 </style>
 </head>
 <body>
@@ -177,7 +178,7 @@
 
     <div class="note">
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
-      ※ 과정(석사/박사) 값을 바꾸면 배정연차·소진율이 즉시 재계산됩니다. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
+      ※ 과정(석사/박사) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
   </div>
 
@@ -188,8 +189,19 @@
 const DEFAULT_QUOTA = { "석사": 11, "박사": 12 };
 
 let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
-let degreeOverride = {}; // name -> "석사"/"박사"
+let degreeOverride = {}; // name -> "석사"/"박사" (students.json 기본값 + 세션 중 수동 변경분)
+let studentConfig = {};  // students.json에서 읽어온 기본 매핑
 let currentMonth = "전체";
+let configLoaded = false;
+
+fetch('./students.json')
+  .then(r => r.ok ? r.json() : {})
+  .then(json => {
+    studentConfig = json;
+    configLoaded = true;
+    if(rawRows.length) render(); // 이미 파일이 로드돼있으면 다시 반영
+  })
+  .catch(() => { configLoaded = true; });
 
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -230,17 +242,17 @@ function handleFile(file){
 
     wb.SheetNames.forEach(sheetName=>{
       const sheet = wb.Sheets[sheetName];
-      const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:'', raw:false});
       if(grid.length < 2) return;
 
-      // 헤더 행 찾기 (날짜/이름 등 키워드가 있는 첫 행)
+      // 헤더 행 찾기 (날짜/이름 등 키워드가 있는 첫 행, 최대 10행까지 탐색)
       let headerIdx = -1;
-      for(let i=0;i<Math.min(grid.length,5);i++){
-        const rowTxt = grid[i].join(' ');
+      for(let i=0;i<Math.min(grid.length,10);i++){
+        const rowTxt = grid[i].join(' ').replace(/\s/g,'');
         if(rowTxt.includes('날짜') || rowTxt.includes('비고')){ headerIdx = i; break; }
       }
       if(headerIdx === -1) return;
-      const header = grid[headerIdx];
+      const header = grid[headerIdx].map(h=>(h||'').toString().replace(/\s/g,''));
 
       const dateCol = findCol(header, ['날짜']);
       const nameCol = findCol(header, ['이름']);
@@ -254,9 +266,9 @@ function handleFile(file){
         const row = grid[r];
         const dateStr = (row[dateCol]||'').toString().trim();
         if(!dateStr) continue;
-        const m = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+        const m = dateStr.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
         if(!m) continue;
-        const month = `${m[1]}-${m[2]}`;
+        const month = `${m[1]}-${m[2].padStart(2,'0')}`;
         const name = nameCol !== -1 ? (row[nameCol]||'').toString().trim() || sheetName : personName;
         const note = (row[noteCol]||'').toString().trim();
         const hasCheckin = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() !== '' : (note === '');
@@ -265,7 +277,8 @@ function handleFile(file){
     });
 
     if(rawRows.length === 0){
-      alert('인식 가능한 데이터를 찾지 못했어요. "날짜"와 "비고" 컬럼이 있는지 확인해주세요.');
+      alert('인식 가능한 데이터를 찾지 못했어요. "날짜"와 "비고" 컬럼이 있는지, 날짜 형식이 올바른지 확인해주세요.\n(브라우저 개발자도구 Console 탭에 자세한 로그가 남아요)');
+      console.warn('시트별 파싱 결과: 헤더 인식된 시트가 없거나, 날짜 형식이 yyyy-mm-dd 패턴이 아닐 수 있습니다.');
       return;
     }
     buildMonthTabs();
@@ -316,7 +329,7 @@ function computeConclusionStats(){
   return names.map(name=>{
     const rows = rawRows.filter(r=>r.name===name);
     const s = statFromRows(rows);
-    const degree = degreeOverride[name] || '석사';
+    const degree = degreeOverride[name] || studentConfig[name] || '석사';
     const quota = DEFAULT_QUOTA[degree];
     const remain = quota - s.consumed;
     const rate = quota>0 ? s.consumed/quota : 0;
@@ -388,6 +401,7 @@ function renderConclusion(stats){
           <option value="석사" ${s.degree==='석사'?'selected':''}>석사</option>
           <option value="박사" ${s.degree==='박사'?'selected':''}>박사</option>
         </select>
+        ${!studentConfig[s.name] ? '<div class="config-warn">설정파일에 없음(기본값)</div>' : ''}
       </td>
       <td>${s.normalDays}</td>
       <td>${s.leaveFull}</td>
