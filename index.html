@@ -152,6 +152,8 @@
           <th>연차 신청</th>
           <th>반차 신청</th>
           <th>출장(제외)</th>
+          <th>공휴일</th>
+          <th>미기록(미출근)</th>
           <th>실질 소진</th>
           <th>배정연차</th>
           <th>잔여 / 초과</th>
@@ -180,6 +182,8 @@
           <th>연차</th>
           <th>반차</th>
           <th>출장(제외)</th>
+          <th>공휴일</th>
+          <th>미기록(미출근)</th>
         </tr>
       </thead>
       <tbody id="monthlyBody"></tbody>
@@ -188,8 +192,9 @@
 
     <div class="note">
       ※ 두 표 모두 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
+      ※ "미기록(미출근)"은 평일인데 출근기록도 없고 비고(연차/반차/출장/공휴일)도 비어있는 날짜 수입니다. 날짜 행이 아예 없어도, 있는데 빈칸이어도 똑같이 여기 잡힙니다. 토/일은 계산에서 제외되고, 비고에 "공휴일"이라고 적으면 별도로 분리되어 미기록/연차 어디에도 안 잡힙니다.<br>
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
-      ※ 과정(석사/박사) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
+      ※ 과정(석사/박사/연구원) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
   </div>
 
@@ -280,11 +285,13 @@ function handleFile(file){
         if(!dateStr) continue;
         const m = dateStr.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
         if(!m) continue;
-        const month = `${m[1]}-${m[2].padStart(2,'0')}`;
+        const mm = m[2].padStart(2,'0'), dd = m[3].padStart(2,'0');
+        const month = `${m[1]}-${mm}`;
+        const dateISO = `${m[1]}-${mm}-${dd}`;
         const name = nameCol !== -1 ? (row[nameCol]||'').toString().trim() || sheetName : personName;
         const note = (row[noteCol]||'').toString().trim();
         const hasCheckin = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() !== '' : (note === '');
-        rawRows.push({name, dateStr, month, hasCheckin, note});
+        rawRows.push({name, dateStr, dateISO, month, hasCheckin, note});
       }
     });
 
@@ -324,23 +331,60 @@ function setActiveTab(activeBtn){
   activeBtn.classList.add('active');
 }
 
-function statFromRows(rows){
-  const normalDays = rows.filter(r=>r.hasCheckin && !r.note).length;
-  const leaveFull = rows.filter(r=>r.note.includes('연차') && !r.note.includes('출장')).length;
-  const leaveHalf = rows.filter(r=>r.note.includes('반차') && !r.note.includes('출장')).length;
-  const trip = rows.filter(r=>r.note.includes('출장')).length;
+function pad2(n){ return String(n).padStart(2,'0'); }
+function toLocalISO(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+
+// 이름 기준으로 "평일 캘린더"를 만들어서, 토/일은 아예 제외하고
+// 그 사람의 관측 범위(첫 기록일~마지막 기록일, monthFilter 지정 시 그 달로 더 좁힘) 안의 모든 평일에 대해
+// 정상출근/연차/반차/출장/공휴일/미기록(미출근) 을 판정합니다.
+function getPersonCalendarStats(name, monthFilter){
+  const rows = rawRows.filter(r=>r.name===name);
+  if(rows.length===0) return null;
+  const dateMap = {};
+  rows.forEach(r=>{ if(r.dateISO) dateMap[r.dateISO] = r; });
+  const isoList = Object.keys(dateMap).sort();
+  if(isoList.length===0) return null;
+
+  const overallStart = new Date(isoList[0]+'T00:00:00');
+  const overallEnd = new Date(isoList[isoList.length-1]+'T00:00:00');
+
+  let rangeStart = overallStart, rangeEnd = overallEnd;
+  if(monthFilter){
+    const [y,m] = monthFilter.split('-').map(Number);
+    const monthStart = new Date(y, m-1, 1);
+    const monthEnd = new Date(y, m, 0);
+    rangeStart = monthStart < overallStart ? overallStart : monthStart;
+    rangeEnd = monthEnd > overallEnd ? overallEnd : monthEnd;
+    if(rangeStart > rangeEnd) return null; // 이 사람 데이터 범위와 해당 월이 안 겹침
+  }
+
+  let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0, unrecorded=0;
+  const cursor = new Date(rangeStart);
+  while(cursor <= rangeEnd){
+    const dow = cursor.getDay(); // 0=일,6=토
+    if(dow!==0 && dow!==6){
+      const row = dateMap[toLocalISO(cursor)];
+      const note = row ? row.note : '';
+      if(note.includes('공휴일')) holiday++;
+      else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
+      else if(note.includes('반차') && !note.includes('출장')) leaveHalf++;
+      else if(note.includes('출장')) trip++;
+      else if(row && row.hasCheckin) normalDays++;
+      else unrecorded++;
+    }
+    cursor.setDate(cursor.getDate()+1);
+  }
   const consumed = leaveFull + leaveHalf*0.5;
-  const attendBase = normalDays + leaveFull + leaveHalf;
+  const attendBase = normalDays + leaveFull + leaveHalf + unrecorded; // 공휴일은 출근 의무에서 제외
   const attendRate = attendBase>0 ? normalDays/attendBase : (normalDays>0?1:0);
-  return {normalDays, leaveFull, leaveHalf, trip, consumed, attendRate};
+  return {normalDays, leaveFull, leaveHalf, trip, holiday, unrecorded, consumed, attendRate};
 }
 
 // 학기 전체 누적(월 필터 영향 없음) - "결론"용, 출석률 좋은 순으로 정렬
 function computeConclusionStats(){
   const names = Array.from(new Set(rawRows.map(r=>r.name)));
   const stats = names.map(name=>{
-    const rows = rawRows.filter(r=>r.name===name);
-    const s = statFromRows(rows);
+    const s = getPersonCalendarStats(name, null) || {normalDays:0,leaveFull:0,leaveHalf:0,trip:0,holiday:0,unrecorded:0,consumed:0,attendRate:0};
     const degree = degreeOverride[name] || studentConfig[name] || '석사';
     const quota = DEFAULT_QUOTA[degree]; // null이면 "연구원" 등 배정연차 없음
     const noQuota = quota === null || quota === undefined;
@@ -366,32 +410,30 @@ function computeMonthlyStats(nameOrder){
   if(currentMonth==='전체'){
     nameOrder.forEach(name=>{
       months.forEach(month=>{
-        const rows = rawRows.filter(r=>r.name===name && r.month===month);
-        if(rows.length===0) return;
-        out.push({name, month, ...statFromRows(rows)});
+        const s = getPersonCalendarStats(name, month);
+        if(!s) return;
+        out.push({name, month, ...s});
       });
     });
   } else {
-    // 특정 월 선택 시: 해당 월 출석률 좋은 순으로 재정렬
     nameOrder.forEach(name=>{
-      const rows = rawRows.filter(r=>r.name===name && r.month===currentMonth);
-      if(rows.length===0) return;
-      out.push({name, month:currentMonth, ...statFromRows(rows)});
+      const s = getPersonCalendarStats(name, currentMonth);
+      if(!s) return;
+      out.push({name, month:currentMonth, ...s});
     });
     out.sort((a,b)=> b.attendRate - a.attendRate);
   }
   return out;
 }
 
-// 인원별 표시용 row: 카운트 컬럼(정상출근일/연차/반차/출장/실질소진/출석률)은 선택 스코프(전체 or 특정월) 기준,
+// 인원별 표시용 row: 카운트 컬럼(정상출근일/연차/반차/출장/공휴일/미기록/실질소진/출석률)은 선택 스코프(전체 or 특정월) 기준,
 // 배정연차/잔여·초과/소진율/결론은 항상 학기 전체 누적 기준
 function computePersonRows(){
   const cumulative = computeConclusionStats(); // quota/remain/rate/status는 여기서 고정
   if(currentMonth==='전체') return cumulative;
 
   const scoped = cumulative.map(c=>{
-    const rows = rawRows.filter(r=>r.name===c.name && r.month===currentMonth);
-    const s = statFromRows(rows); // normalDays/leaveFull/leaveHalf/trip/consumed/attendRate만 덮어씀
+    const s = getPersonCalendarStats(c.name, currentMonth) || {normalDays:0,leaveFull:0,leaveHalf:0,trip:0,holiday:0,unrecorded:0,consumed:0,attendRate:0};
     return {...c, ...s};
   });
   scoped.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
@@ -420,6 +462,8 @@ function renderCards(conclusion, monthly){
   const scopeStats = currentMonth==='전체' ? conclusion : monthly;
   const avgAttend = scopeStats.length ? (scopeStats.reduce((a,s)=>a+s.attendRate,0)/scopeStats.length*100).toFixed(0) : 0;
   const scopeTrip = scopeStats.reduce((a,s)=>a+s.trip,0);
+  const missingPeople = scopeStats.filter(s=>s.unrecorded>0).length;
+  const totalUnrecorded = scopeStats.reduce((a,s)=>a+s.unrecorded,0);
   const scopeLabel = currentMonth==='전체' ? '(전체기간)' : `(${currentMonth})`;
 
   const cards = [
@@ -428,6 +472,7 @@ function renderCards(conclusion, monthly){
     {label:'소진 임박 (학기누적,70%↑)', value:`${warnCount}명`, cls: warnCount>0?'amber':''},
     {label:`평균 출석률 ${scopeLabel}`, value:`${avgAttend}%`},
     {label:`출장 인정 건수(제외) ${scopeLabel}`, value:`${scopeTrip}건`},
+    {label:`미기록(미출근) 인원 ${scopeLabel}`, value:`${missingPeople}명 (총 ${totalUnrecorded}일)`, cls: missingPeople>0?'red':''},
   ];
   document.getElementById('summaryCards').innerHTML = cards.map(c=>`
     <div class="card">
@@ -469,6 +514,8 @@ function renderConclusion(stats){
       <td>${s.leaveFull}</td>
       <td>${s.leaveHalf}</td>
       <td>${s.trip}</td>
+      <td>${s.holiday>0 ? s.holiday : '0'}</td>
+      <td>${s.unrecorded>0 ? `<span style="color:var(--red); font-weight:700;">${s.unrecorded}</span>` : '0'}</td>
       <td><strong>${s.consumed.toFixed(1)}</strong></td>
       <td>${s.noQuota ? '해당없음' : s.quota}</td>
       <td style="color:${remainColor}; font-weight:700;">${remainLabel}</td>
@@ -503,6 +550,8 @@ function renderMonthly(rows){
       <td>${r.leaveFull}</td>
       <td>${r.leaveHalf}</td>
       <td>${r.trip}</td>
+      <td>${r.holiday>0 ? r.holiday : '0'}</td>
+      <td>${r.unrecorded>0 ? `<span style="color:var(--red); font-weight:700;">${r.unrecorded}</span>` : '0'}</td>
     </tr>`;
   }).join('');
 }
@@ -541,7 +590,7 @@ document.getElementById('downloadBtn').addEventListener('click', ()=>{
   const conclusionData = personRows.map(s=>({
     '이름': s.name, '과정': s.degree, '출석률(%)': Math.round(s.attendRate*100),
     '정상출근일': s.normalDays,
-    '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip,
+    '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip, '공휴일': s.holiday, '미기록(미출근)': s.unrecorded,
     '실질 소진': s.consumed, '배정연차(학기누적)': s.quota, '잔여/초과(학기누적)': s.remain,
     '소진율(%)(학기누적)': Math.round(s.rate*100), '결론(학기누적)': s.statusLabel
   }));
@@ -549,7 +598,7 @@ document.getElementById('downloadBtn').addEventListener('click', ()=>{
 
   const monthlyData = monthly.map(r=>({
     '이름': r.name, '월': r.month, '출석률(%)': Math.round(r.attendRate*100),
-    '정상출근일': r.normalDays, '연차': r.leaveFull, '반차': r.leaveHalf, '출장(제외)': r.trip
+    '정상출근일': r.normalDays, '연차': r.leaveFull, '반차': r.leaveHalf, '출장(제외)': r.trip, '공휴일': r.holiday, '미기록(미출근)': r.unrecorded
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthlyData), '월별출석현황');
 
