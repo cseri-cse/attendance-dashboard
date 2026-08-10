@@ -205,6 +205,7 @@
 const DEFAULT_QUOTA = { "석사": 11, "박사": 12, "연구원": null }; // null = 배정연차 없음(초과 계산 대상 제외)
 
 let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
+let globalMinISO = null, globalMaxISO = null; // 업로드된 전체 데이터의 날짜 범위(모든 사람에게 동일 적용)
 let degreeOverride = {}; // name -> "석사"/"박사" (students.json 기본값 + 세션 중 수동 변경분)
 let studentConfig = {};  // students.json에서 읽어온 기본 매핑
 let currentMonth = "전체";
@@ -300,6 +301,9 @@ function handleFile(file){
       console.warn('시트별 파싱 결과: 헤더 인식된 시트가 없거나, 날짜 형식이 yyyy-mm-dd 패턴이 아닐 수 있습니다.');
       return;
     }
+    const allISO = rawRows.map(r=>r.dateISO).filter(Boolean).sort();
+    globalMinISO = allISO[0];
+    globalMaxISO = allISO[allISO.length-1];
     buildMonthTabs();
     render();
     resultArea.style.display = 'block';
@@ -335,18 +339,16 @@ function pad2(n){ return String(n).padStart(2,'0'); }
 function toLocalISO(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 
 // 이름 기준으로 "평일 캘린더"를 만들어서, 토/일은 아예 제외하고
-// 그 사람의 관측 범위(첫 기록일~마지막 기록일, monthFilter 지정 시 그 달로 더 좁힘) 안의 모든 평일에 대해
-// 정상출근/연차/반차/출장/공휴일/미기록(미출근) 을 판정합니다.
+// 업로드된 전체 데이터의 날짜 범위(globalMinISO~globalMaxISO, monthFilter 지정 시 그 달로 더 좁힘) 안의 모든 평일에 대해
+// 정상출근/연차/반차/출장/공휴일/미기록(미출근) 을 판정합니다. (개인 범위가 아니라 전체 공통 범위를 씀 — 기록이 적은 사람도 결측이 제대로 잡히도록)
 function getPersonCalendarStats(name, monthFilter){
+  if(!globalMinISO || !globalMaxISO) return null;
   const rows = rawRows.filter(r=>r.name===name);
-  if(rows.length===0) return null;
   const dateMap = {};
   rows.forEach(r=>{ if(r.dateISO) dateMap[r.dateISO] = r; });
-  const isoList = Object.keys(dateMap).sort();
-  if(isoList.length===0) return null;
 
-  const overallStart = new Date(isoList[0]+'T00:00:00');
-  const overallEnd = new Date(isoList[isoList.length-1]+'T00:00:00');
+  const overallStart = new Date(globalMinISO+'T00:00:00');
+  const overallEnd = new Date(globalMaxISO+'T00:00:00');
 
   let rangeStart = overallStart, rangeEnd = overallEnd;
   if(monthFilter){
@@ -355,7 +357,7 @@ function getPersonCalendarStats(name, monthFilter){
     const monthEnd = new Date(y, m, 0);
     rangeStart = monthStart < overallStart ? overallStart : monthStart;
     rangeEnd = monthEnd > overallEnd ? overallEnd : monthEnd;
-    if(rangeStart > rangeEnd) return null; // 이 사람 데이터 범위와 해당 월이 안 겹침
+    if(rangeStart > rangeEnd) return null; // 전체 데이터 범위와 해당 월이 안 겹침
   }
 
   let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0, unrecorded=0;
@@ -366,8 +368,8 @@ function getPersonCalendarStats(name, monthFilter){
       const row = dateMap[toLocalISO(cursor)];
       const note = row ? row.note : '';
       if(note.includes('공휴일')) holiday++;
-      else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
       else if(note.includes('반차') && !note.includes('출장')) leaveHalf++;
+      else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
       else if(note.includes('출장')) trip++;
       else if(row && row.hasCheckin) normalDays++;
       else unrecorded++;
