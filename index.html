@@ -85,9 +85,41 @@
   .pill.over{background:var(--red-soft); color:var(--red);}
   .bar-cell{display:flex; align-items:center; gap:8px; justify-content:center;}
   .heat-cell{display:inline-flex; align-items:center; justify-content:center; min-width:52px; padding:6px 8px; border-radius:6px; font-size:12px; font-weight:700; cursor:default;}
-  .heat-cell.empty{background:#F3F4F6; color:var(--muted); font-weight:500;}
+  .heat-cell.heat-empty{background:#F3F4F6; color:var(--muted); font-weight:500;}
   #monthlyPivotTable thead th{white-space:nowrap;}
   #monthlyPivotTable td.name{white-space:nowrap;}
+  .heat-cell{cursor:pointer;}
+  .heat-cell:hover{outline:2px solid var(--blue); outline-offset:-2px;}
+  td.name.clickable{cursor:pointer;}
+  td.name.clickable:hover{color:var(--blue); text-decoration:underline;}
+
+  .modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(17,24,39,0.5);
+    z-index:1000; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-overlay.open{display:flex;}
+  .modal-box{
+    background:#fff; border-radius:12px; max-width:640px; width:100%; max-height:82vh;
+    display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 50px rgba(0,0,0,0.25);
+  }
+  .modal-header{
+    display:flex; align-items:center; justify-content:space-between; padding:16px 20px;
+    background:var(--navy); color:#fff; font-weight:700; font-size:14px;
+  }
+  .modal-close{background:none; border:none; color:#fff; font-size:16px; cursor:pointer; padding:4px 8px;}
+  .modal-summary{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px;
+    padding:14px 20px; border-bottom:1px solid var(--line); font-size:12px;
+  }
+  .modal-summary div{background:var(--bg); border-radius:8px; padding:8px 10px; text-align:center;}
+  .modal-summary .num{font-size:16px; font-weight:700; display:block; margin-top:2px;}
+  .modal-table-wrap{overflow-y:auto; padding:0 20px 16px;}
+  .modal-table-wrap table{width:100%; border-collapse:collapse; font-size:12px;}
+  .modal-table-wrap th{position:sticky; top:0; background:#fff; padding:8px 6px; text-align:center; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted);}
+  .modal-table-wrap td{padding:7px 6px; text-align:center; border-bottom:1px solid #F1F2F4;}
+  .modal-table-wrap td:first-child, .modal-table-wrap th:first-child{text-align:left; padding-left:12px;}
+  .modal-table-wrap td:last-child{text-align:left;}
+  .modal-empty-row{color:var(--muted); text-align:center; padding:20px !important;}
   .bar-track{width:64px; height:6px; background:#E9EDF3; border-radius:99px; overflow:hidden;}
   .bar-fill{height:100%; border-radius:99px;}
 
@@ -199,6 +231,24 @@
   <div class="empty" id="emptyState">업로드된 파일이 없습니다. 위에 엑셀 파일을 올려주세요.</div>
 </div>
 
+<div id="detailModalOverlay" class="modal-overlay" onclick="if(event.target===this) closeDetailModal();">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div id="modalTitle">상세 보기</div>
+      <button class="modal-close" onclick="closeDetailModal()">✕</button>
+    </div>
+    <div id="modalSummary" class="modal-summary"></div>
+    <div class="modal-table-wrap">
+      <table>
+        <thead>
+          <tr><th style="text-align:left; padding-left:12px;">날짜</th><th>출근</th><th>퇴근</th><th style="text-align:left;">비고</th></tr>
+        </thead>
+        <tbody id="modalRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script>
 const DEFAULT_QUOTA = { "석사": 11, "박사": 12, "연구원": null }; // null = 배정연차 없음(초과 계산 대상 제외)
 
@@ -282,6 +332,7 @@ function handleFile(file){
       const dateCol = findCol(header, ['날짜']);
       const nameCol = findCol(header, ['이름']);
       const checkinCol = findCol(header, ['출근']);
+      const checkoutCol = findCol(header, ['퇴근']);
       const noteCol = findCol(header, ['비고']);
       if(dateCol === -1 || noteCol === -1) return;
 
@@ -298,8 +349,10 @@ function handleFile(file){
         const dateISO = `${m[1]}-${mm}-${dd}`;
         const name = nameCol !== -1 ? (row[nameCol]||'').toString().trim() || sheetName : personName;
         const note = (row[noteCol]||'').toString().trim();
-        const hasCheckin = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() !== '' : (note === '');
-        rawRows.push({name, dateStr, dateISO, month, hasCheckin, note});
+        const checkinTime = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() : '';
+        const checkoutTime = checkoutCol !== -1 ? (row[checkoutCol]||'').toString().trim() : '';
+        const hasCheckin = checkinCol !== -1 ? checkinTime !== '' : (note === '');
+        rawRows.push({name, dateStr, dateISO, month, hasCheckin, note, checkinTime, checkoutTime});
       }
     });
 
@@ -518,7 +571,7 @@ function renderConclusion(stats){
     const attendColor = attendPct>=90 ? 'var(--green)' : attendPct>=75 ? 'var(--amber)' : 'var(--red)';
     return `
     <tr>
-      <td class="name">${s.name}</td>
+      <td class="name clickable" onclick="openDetailModal('${escapeAttr(s.name)}', ${currentMonth==='전체' ? 'null' : `'${currentMonth}'`})">${s.name}</td>
       <td>
         <select class="degree-select" onchange="changeDegree('${s.name}', this.value)">
           <option value="석사" ${s.degree==='석사'?'selected':''}>석사</option>
@@ -570,7 +623,7 @@ function renderMonthlyPivot(nameOrder){
     const cells = months.map(m=>{
       const rows = rawRows.filter(r=>r.name===name && r.month===m);
       if(rows.length===0){
-        return `<td><span class="heat-cell empty">-</span></td>`;
+        return `<td><span class="heat-cell heat-empty" onclick="openDetailModal('${escapeAttr(name)}','${m}')">-</span></td>`;
       }
       const s = getPersonStats(name, m);
       const pct = Math.round(s.attendRate*100);
@@ -578,12 +631,58 @@ function renderMonthlyPivot(nameOrder){
       if(pct>=90){ bg='var(--green-soft)'; fg='var(--green)'; }
       else if(pct>=75){ bg='var(--amber-soft)'; fg='var(--amber)'; }
       else { bg='var(--red-soft)'; fg='var(--red)'; }
-      const title = `${m} · 정상출근 ${s.normalDays} · 연차 ${s.leaveFull} · 반차 ${s.leaveHalf} · 출장 ${s.trip} · 미기록 ${s.unrecorded}`;
-      return `<td><span class="heat-cell" title="${title}" style="background:${bg}; color:${fg};">${pct}%</span></td>`;
+      const title = `${m} · 정상출근 ${s.normalDays} · 연차 ${s.leaveFull} · 반차 ${s.leaveHalf} · 출장 ${s.trip} · 미기록 ${s.unrecorded} (클릭하면 상세)`;
+      return `<td><span class="heat-cell" title="${title}" style="background:${bg}; color:${fg};" onclick="openDetailModal('${escapeAttr(name)}','${m}')">${pct}%</span></td>`;
     }).join('');
-    return `<tr><td class="name">${name}</td>${cells}</tr>`;
+    return `<tr><td class="name clickable" onclick="openDetailModal('${escapeAttr(name)}', null)">${name}</td>${cells}</tr>`;
   }).join('');
 }
+
+function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
+
+function openDetailModal(name, monthFilter){
+  const months = monthFilter ? [monthFilter] : getAllDataMonths();
+  const rows = rawRows.filter(r=>r.name===name && months.includes(r.month)).sort((a,b)=> (a.dateISO||'').localeCompare(b.dateISO||''));
+  const s = getPersonStats(name, monthFilter);
+
+  document.getElementById('modalTitle').textContent = monthFilter ? `${name} · ${monthFilter}` : `${name} · 전체 기간`;
+  document.getElementById('modalSummary').innerHTML = `
+    <div>정상출근<span class="num" style="color:var(--green);">${s.normalDays}</span></div>
+    <div>연차<span class="num">${s.leaveFull}</span></div>
+    <div>반차<span class="num">${s.leaveHalf}</span></div>
+    <div>출장<span class="num">${s.trip}</span></div>
+    <div>공휴일<span class="num">${s.holiday}</span></div>
+    <div>미기록<span class="num" style="color:${s.unrecorded>0?'var(--red)':'inherit'};">${s.unrecorded}</span></div>
+    <div>출석률<span class="num">${Math.round(s.attendRate*100)}%</span></div>
+  `;
+
+  const body = document.getElementById('modalRows');
+  if(rows.length===0){
+    body.innerHTML = `<tr><td colspan="4" class="modal-empty-row">이 기간에 등록된 기록이 없습니다.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map(r=>{
+      const noteColor = r.note.includes('공휴일') ? 'var(--blue)'
+        : r.note.includes('반차') ? 'var(--amber)'
+        : r.note.includes('연차') ? 'var(--muted)'
+        : r.note.includes('출장') ? 'var(--green)'
+        : 'inherit';
+      return `<tr>
+        <td>${r.dateStr || r.dateISO || ''}</td>
+        <td>${r.checkinTime || (r.hasCheckin ? '✓' : '')}</td>
+        <td>${r.checkoutTime || ''}</td>
+        <td style="color:${noteColor};">${r.note || (r.hasCheckin ? '' : '-')}</td>
+      </tr>`;
+    }).join('');
+  }
+  document.getElementById('detailModalOverlay').classList.add('open');
+}
+
+function closeDetailModal(){
+  document.getElementById('detailModalOverlay').classList.remove('open');
+}
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape') closeDetailModal();
+});
 
 function changeDegree(name, value){
   degreeOverride[name] = value;
