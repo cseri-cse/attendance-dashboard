@@ -192,7 +192,7 @@
 
     <div class="note">
       ※ 두 표 모두 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
-      ※ "미기록(미출근)"은 평일인데 출근기록도 없고 비고(연차/반차/출장/공휴일)도 비어있는 날짜 수입니다. 날짜 행이 아예 없어도, 있는데 빈칸이어도 똑같이 여기 잡힙니다. 토/일은 계산에서 제외되고, 비고에 "공휴일"이라고 적으면 별도로 분리되어 미기록/연차 어디에도 안 잡힙니다.<br>
+      ※ 출석률·"미기록(미출근)"은 이제 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 지정한 값, 없으면 평일 자동계산) 대비로 계산됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날은 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리입니다.<br>
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
       ※ 과정(석사/박사/연구원) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
@@ -208,6 +208,7 @@ let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
 let globalMinISO = null, globalMaxISO = null; // 업로드된 전체 데이터의 날짜 범위(모든 사람에게 동일 적용)
 let degreeOverride = {}; // name -> "석사"/"박사" (students.json 기본값 + 세션 중 수동 변경분)
 let studentConfig = {};  // students.json에서 읽어온 기본 매핑
+let workdaysConfig = {}; // workdays.json에서 읽어온 "yyyy-mm": 이번달 출근해야 하는 날짜 수
 let currentMonth = "전체";
 let configLoaded = false;
 
@@ -219,6 +220,14 @@ fetch('./students.json')
     if(rawRows.length) render(); // 이미 파일이 로드돼있으면 다시 반영
   })
   .catch(() => { configLoaded = true; });
+
+fetch('./workdays.json')
+  .then(r => r.ok ? r.json() : {})
+  .then(json => {
+    workdaysConfig = json;
+    if(rawRows.length) render();
+  })
+  .catch(() => {});
 
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -338,55 +347,68 @@ function setActiveTab(activeBtn){
 function pad2(n){ return String(n).padStart(2,'0'); }
 function toLocalISO(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 
-// 이름 기준으로 "평일 캘린더"를 만들어서, 토/일은 아예 제외하고
-// 업로드된 전체 데이터의 날짜 범위(globalMinISO~globalMaxISO, monthFilter 지정 시 그 달로 더 좁힘) 안의 모든 평일에 대해
-// 정상출근/연차/반차/출장/공휴일/미기록(미출근) 을 판정합니다. (개인 범위가 아니라 전체 공통 범위를 씀 — 기록이 적은 사람도 결측이 제대로 잡히도록)
-function getPersonCalendarStats(name, monthFilter){
-  if(!globalMinISO || !globalMaxISO) return null;
-  const rows = rawRows.filter(r=>r.name===name);
-  const dateMap = {};
-  rows.forEach(r=>{ if(r.dateISO) dateMap[r.dateISO] = r; });
+// 실제로 존재하는 rows만 세서 분류 (평일 순회 안 함 - 훨씬 단순하고 명확)
+function classifyRows(rows){
+  let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0;
+  rows.forEach(r=>{
+    const note = r.note || '';
+    if(note.includes('공휴일')) holiday++;
+    else if(note.includes('반차') && !note.includes('출장')) leaveHalf++;
+    else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
+    else if(note.includes('출장')) trip++;
+    else if(r.hasCheckin) normalDays++;
+    // 그 외(출근기록도 비고도 없는 빈 행)는 어디에도 안 잡히고, 아래에서 "필요출근일수 - 채워진 일수"로 미기록 처리됨
+  });
+  return {normalDays, leaveFull, leaveHalf, trip, holiday};
+}
 
-  const overallStart = new Date(globalMinISO+'T00:00:00');
-  const overallEnd = new Date(globalMaxISO+'T00:00:00');
-
-  let rangeStart = overallStart, rangeEnd = overallEnd;
-  if(monthFilter){
-    const [y,m] = monthFilter.split('-').map(Number);
-    const monthStart = new Date(y, m-1, 1);
-    const monthEnd = new Date(y, m, 0);
-    rangeStart = monthStart < overallStart ? overallStart : monthStart;
-    rangeEnd = monthEnd > overallEnd ? overallEnd : monthEnd;
-    if(rangeStart > rangeEnd) return null; // 전체 데이터 범위와 해당 월이 안 겹침
+// 특정 월의 "필요 출근일수": workdays.json에 지정돼 있으면 그 값, 없으면 평일 자동 계산(주말 제외, 전체 데이터 범위로 클램프)
+function getRequiredDays(month){
+  if(workdaysConfig && workdaysConfig[month] !== undefined && workdaysConfig[month] !== null){
+    return Number(workdaysConfig[month]);
   }
-
-  let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0, unrecorded=0;
+  if(!globalMinISO || !globalMaxISO) return 0;
+  const [y,m] = month.split('-').map(Number);
+  const monthStart = new Date(y, m-1, 1);
+  const monthEnd = new Date(y, m, 0);
+  const globalStart = new Date(globalMinISO+'T00:00:00');
+  const globalEnd = new Date(globalMaxISO+'T00:00:00');
+  const rangeStart = monthStart < globalStart ? globalStart : monthStart;
+  const rangeEnd = monthEnd > globalEnd ? globalEnd : monthEnd;
+  if(rangeStart > rangeEnd) return 0;
+  let count = 0;
   const cursor = new Date(rangeStart);
   while(cursor <= rangeEnd){
-    const dow = cursor.getDay(); // 0=일,6=토
-    if(dow!==0 && dow!==6){
-      const row = dateMap[toLocalISO(cursor)];
-      const note = row ? row.note : '';
-      if(note.includes('공휴일')) holiday++;
-      else if(note.includes('반차') && !note.includes('출장')) leaveHalf++;
-      else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
-      else if(note.includes('출장')) trip++;
-      else if(row && row.hasCheckin) normalDays++;
-      else unrecorded++;
-    }
+    const dow = cursor.getDay();
+    if(dow!==0 && dow!==6) count++;
     cursor.setDate(cursor.getDate()+1);
   }
-  const consumed = leaveFull + leaveHalf*0.5;
-  const attendBase = normalDays + leaveFull + leaveHalf + unrecorded; // 공휴일은 출근 의무에서 제외
-  const attendRate = attendBase>0 ? normalDays/attendBase : (normalDays>0?1:0);
-  return {normalDays, leaveFull, leaveHalf, trip, holiday, unrecorded, consumed, attendRate};
+  return count;
+}
+
+function getAllDataMonths(){
+  return Array.from(new Set(rawRows.map(r=>r.month))).sort();
+}
+
+// name + monthFilter(없으면 전체 기간) 기준으로 정상출근/연차/반차/출장/공휴일/미기록/실질소진/출석률 계산
+// 출석률·미기록은 이제 "필요 출근일수"(workdays.json 또는 평일 자동계산) 대비로 계산됩니다.
+function getPersonStats(name, monthFilter){
+  const months = monthFilter ? [monthFilter] : getAllDataMonths();
+  const rows = rawRows.filter(r=>r.name===name && months.includes(r.month));
+  const c = classifyRows(rows);
+  const filled = c.normalDays + c.leaveFull + c.leaveHalf + c.trip; // 공휴일은 필요일수 자체에서 이미 빠진다고 보고 제외
+  const required = months.reduce((sum,m)=>sum+getRequiredDays(m), 0);
+  const unrecorded = Math.max(0, required - filled);
+  const consumed = c.leaveFull + c.leaveHalf*0.5;
+  const attendRate = required>0 ? c.normalDays/required : (c.normalDays>0?1:0);
+  return {...c, unrecorded, consumed, attendRate};
 }
 
 // 학기 전체 누적(월 필터 영향 없음) - "결론"용, 출석률 좋은 순으로 정렬
 function computeConclusionStats(){
   const names = Array.from(new Set(rawRows.map(r=>r.name)));
   const stats = names.map(name=>{
-    const s = getPersonCalendarStats(name, null) || {normalDays:0,leaveFull:0,leaveHalf:0,trip:0,holiday:0,unrecorded:0,consumed:0,attendRate:0};
+    const s = getPersonStats(name, null);
     const degree = degreeOverride[name] || studentConfig[name] || '석사';
     const quota = DEFAULT_QUOTA[degree]; // null이면 "연구원" 등 배정연차 없음
     const noQuota = quota === null || quota === undefined;
@@ -405,23 +427,21 @@ function computeConclusionStats(){
 
 // 월별 출석 현황 - 월 탭 필터 반영, 학기 누적 순서(출석률 좋은 순)를 그대로 따름
 function computeMonthlyStats(nameOrder){
-  const months = currentMonth==='전체'
-    ? Array.from(new Set(rawRows.map(r=>r.month))).sort()
-    : [currentMonth];
+  const months = currentMonth==='전체' ? getAllDataMonths() : [currentMonth];
   const out = [];
   if(currentMonth==='전체'){
     nameOrder.forEach(name=>{
       months.forEach(month=>{
-        const s = getPersonCalendarStats(name, month);
-        if(!s) return;
-        out.push({name, month, ...s});
+        const rows = rawRows.filter(r=>r.name===name && r.month===month);
+        if(rows.length===0) return;
+        out.push({name, month, ...getPersonStats(name, month)});
       });
     });
   } else {
     nameOrder.forEach(name=>{
-      const s = getPersonCalendarStats(name, currentMonth);
-      if(!s) return;
-      out.push({name, month:currentMonth, ...s});
+      const rows = rawRows.filter(r=>r.name===name && r.month===currentMonth);
+      if(rows.length===0) return;
+      out.push({name, month:currentMonth, ...getPersonStats(name, currentMonth)});
     });
     out.sort((a,b)=> b.attendRate - a.attendRate);
   }
@@ -435,7 +455,7 @@ function computePersonRows(){
   if(currentMonth==='전체') return cumulative;
 
   const scoped = cumulative.map(c=>{
-    const s = getPersonCalendarStats(c.name, currentMonth) || {normalDays:0,leaveFull:0,leaveHalf:0,trip:0,holiday:0,unrecorded:0,consumed:0,attendRate:0};
+    const s = getPersonStats(c.name, currentMonth);
     return {...c, ...s};
   });
   scoped.sort((a,b)=> (Number(a.noQuota)-Number(b.noQuota)) || (b.attendRate - a.attendRate) || (a.rate - b.rate));
