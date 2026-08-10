@@ -74,7 +74,7 @@
   }
   tbody tr:last-child td{border-bottom:none;}
   tbody tr:hover{background:#FAFBFC;}
-  td.name{font-weight:700; text-align:left; padding-left:16px;}
+  td.name{font-weight:700; text-align:left; padding-left:16px; white-space:nowrap;}
   select.degree-select{
     font-size:12px; border:1px solid var(--line); border-radius:6px; padding:3px 6px; background:#fff;
   }
@@ -399,7 +399,7 @@ function computeConclusionStats(){
     return {name, degree, quota, noQuota, remain, rate, status, statusLabel, ...s};
   });
   // 출석률 높은 사람 먼저, 동률이면 소진율 낮은 사람 먼저
-  stats.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
+  stats.sort((a,b)=> (Number(a.noQuota)-Number(b.noQuota)) || (b.attendRate - a.attendRate) || (a.rate - b.rate));
   return stats;
 }
 
@@ -438,7 +438,7 @@ function computePersonRows(){
     const s = getPersonCalendarStats(c.name, currentMonth) || {normalDays:0,leaveFull:0,leaveHalf:0,trip:0,holiday:0,unrecorded:0,consumed:0,attendRate:0};
     return {...c, ...s};
   });
-  scoped.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
+  scoped.sort((a,b)=> (Number(a.noQuota)-Number(b.noQuota)) || (b.attendRate - a.attendRate) || (a.rate - b.rate));
   return scoped;
 }
 
@@ -519,11 +519,11 @@ function renderConclusion(stats){
       <td>${s.holiday>0 ? s.holiday : '0'}</td>
       <td>${s.unrecorded>0 ? `<span style="color:var(--red); font-weight:700;">${s.unrecorded}</span>` : '0'}</td>
       <td><strong>${s.consumed.toFixed(1)}</strong></td>
-      <td>${s.noQuota ? '해당없음' : s.quota}</td>
-      <td style="color:${remainColor}; font-weight:700;">${remainLabel}</td>
+      <td style="white-space:nowrap;">${s.noQuota ? '해당없음' : s.quota}</td>
+      <td style="color:${remainColor}; font-weight:700; white-space:nowrap;">${remainLabel}</td>
       <td>
         ${s.noQuota
-          ? '<span style="color:var(--muted); font-size:11.5px;">해당없음</span>'
+          ? '<span style="color:var(--muted); font-size:11.5px; white-space:nowrap;">해당없음</span>'
           : `<div class="bar-cell">
               <div class="bar-track"><div class="bar-fill" style="width:${Math.min(s.rate*100,100)}%; background:${barColor(s)};"></div></div>
               <span>${(s.rate*100).toFixed(0)}%</span>
