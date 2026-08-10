@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>연구실 근태 · 연차 소진 대시보드</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --navy:#111827; --navy-2:#1F2937; --blue:#2563EB; --blue-soft:#EFF4FF;
+    --line:#E5E7EB; --muted:#6B7280; --bg:#F7F8FA; --card:#FFFFFF;
+    --green:#15803D; --green-soft:#EAF8EE;
+    --amber:#B45309; --amber-soft:#FFF6E8;
+    --red:#B91C1C; --red-soft:#FDECEC;
+    --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--navy);
+    font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',-apple-system,BlinkMacSystemFont,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  header{
+    background:var(--navy); color:#fff; padding:22px 32px;
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;
+  }
+  header .brand{display:flex; align-items:baseline; gap:10px;}
+  header h1{font-size:17px; font-weight:700; margin:0; letter-spacing:-0.2px;}
+  header .sub{font-size:12px; color:#9CA3AF;}
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 24px 80px;}
+
+  .uploader{
+    background:var(--card); border:1.5px dashed #C7CDD8; border-radius:var(--radius);
+    padding:34px; text-align:center; cursor:pointer; transition:.15s border-color, .15s background;
+  }
+  .uploader:hover, .uploader.drag{border-color:var(--blue); background:var(--blue-soft);}
+  .uploader input{display:none;}
+  .uploader .icon{font-size:26px; margin-bottom:8px;}
+  .uploader .title{font-weight:600; font-size:14px;}
+  .uploader .desc{font-size:12px; color:var(--muted); margin-top:4px; line-height:1.6;}
+
+  .toolbar{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    margin:26px 0 14px; flex-wrap:wrap;
+  }
+  .tabs{display:flex; gap:6px; flex-wrap:wrap;}
+  .tab-btn{
+    border:1px solid var(--line); background:#fff; color:var(--navy-2); font-size:12.5px;
+    padding:7px 14px; border-radius:999px; cursor:pointer; font-weight:600;
+  }
+  .tab-btn.active{background:var(--navy); color:#fff; border-color:var(--navy);}
+  .actions{display:flex; gap:8px;}
+  .btn{
+    border:1px solid var(--line); background:#fff; padding:8px 14px; font-size:12.5px;
+    border-radius:8px; cursor:pointer; font-weight:600; color:var(--navy-2);
+  }
+  .btn.primary{background:var(--blue); border-color:var(--blue); color:#fff;}
+  .btn:disabled{opacity:.4; cursor:not-allowed;}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px;}
+  .card .label{font-size:11.5px; color:var(--muted); font-weight:600;}
+  .card .value{font-size:22px; font-weight:700; margin-top:6px; letter-spacing:-0.3px;}
+  .card .value.red{color:var(--red);} .card .value.amber{color:var(--amber);}
+
+  table{width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+  thead th{
+    background:var(--navy-2); color:#fff; font-size:11.5px; font-weight:600; text-align:center;
+    padding:11px 8px; white-space:nowrap;
+  }
+  tbody td{
+    padding:11px 8px; text-align:center; font-size:12.5px; border-bottom:1px solid var(--line);
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#FAFBFC;}
+  td.name{font-weight:700; text-align:left; padding-left:16px;}
+  select.degree-select{
+    font-size:12px; border:1px solid var(--line); border-radius:6px; padding:3px 6px; background:#fff;
+  }
+  .pill{display:inline-block; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:700;}
+  .pill.ok{background:var(--green-soft); color:var(--green);}
+  .pill.warn{background:var(--amber-soft); color:var(--amber);}
+  .pill.over{background:var(--red-soft); color:var(--red);}
+  .bar-cell{display:flex; align-items:center; gap:8px; justify-content:center;}
+  .bar-track{width:64px; height:6px; background:#E9EDF3; border-radius:99px; overflow:hidden;}
+  .bar-fill{height:100%; border-radius:99px;}
+
+  .empty{padding:80px 20px; text-align:center; color:var(--muted); font-size:13px;}
+  .note{font-size:11.5px; color:var(--muted); margin-top:14px; line-height:1.7;}
+  .legend{display:flex; gap:16px; font-size:11.5px; color:var(--muted); margin-top:10px; flex-wrap:wrap;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .dot{width:8px; height:8px; border-radius:50%;}
+
+  .section-title{margin:0 0 12px;}
+  .section-title h2{font-size:14px; margin:0; font-weight:700; display:flex; align-items:baseline; gap:10px;}
+  .section-title h2 span{font-size:11.5px; font-weight:500; color:var(--muted);}
+  table + table{margin-top:0;}
+  .conclusion-pill{display:inline-flex; align-items:center; gap:5px; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:700;}
+  .conclusion-pill.ok{background:var(--green-soft); color:var(--green);}
+  .conclusion-pill.warn{background:var(--amber-soft); color:var(--amber);}
+  .conclusion-pill.over{background:var(--red-soft); color:var(--red);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>연구실 근태 · 연차 소진 대시보드</h1>
+  </div>
+  <div class="sub">가치업 export 엑셀(탭=연구원별) 업로드 → 자동 집계</div>
+</header>
+
+<div class="wrap">
+
+  <label class="uploader" id="dropzone">
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <div class="icon">📊</div>
+    <div class="title">엑셀 파일을 여기로 드래그하거나 클릭해서 업로드</div>
+    <div class="desc">탭(시트) 1개 = 연구원 1명 · 비고 열에 "연차" / "반차" / "출장" 텍스트로 구분되어 있으면 자동 인식합니다.</div>
+  </label>
+
+  <div id="resultArea" style="display:none;">
+    <div class="toolbar">
+      <div class="tabs" id="monthTabs"></div>
+      <div class="actions">
+        <button class="btn" id="reuploadBtn">다른 파일 업로드</button>
+        <button class="btn primary" id="downloadBtn">엑셀로 다운로드</button>
+      </div>
+    </div>
+
+    <div class="cards" id="summaryCards"></div>
+
+    <div class="section-title">
+      <h2>학기 누적 연차 결론<span>월 필터와 무관하게 업로드된 전체 기간 기준으로 계산됩니다</span></h2>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left; padding-left:16px;">이름</th>
+          <th>과정</th>
+          <th>정상출근일</th>
+          <th>연차 신청</th>
+          <th>반차 신청</th>
+          <th>출장(제외)</th>
+          <th>실질 소진</th>
+          <th>배정연차</th>
+          <th>잔여 / 초과</th>
+          <th>소진율</th>
+          <th>결론</th>
+        </tr>
+      </thead>
+      <tbody id="conclusionBody"></tbody>
+    </table>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--green);"></span>양호 (소진율 70% 미만)</span>
+      <span><span class="dot" style="background:var(--amber);"></span>주의 (70~99%)</span>
+      <span><span class="dot" style="background:var(--red);"></span>초과 (100% 이상)</span>
+    </div>
+
+    <div class="section-title" style="margin-top:36px;">
+      <h2>월별 출석 현황<span>선택한 월 기준 · 출석률 = 정상출근일 / (정상출근일+연차+반차)</span></h2>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left; padding-left:16px;">이름</th>
+          <th>월</th>
+          <th style="width:170px;">출석률</th>
+          <th>정상출근일</th>
+          <th>연차</th>
+          <th>반차</th>
+          <th>출장(제외)</th>
+        </tr>
+      </thead>
+      <tbody id="monthlyBody"></tbody>
+    </table>
+
+    <div class="note">
+      ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
+      ※ 과정(석사/박사) 값을 바꾸면 배정연차·소진율이 즉시 재계산됩니다. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
+    </div>
+  </div>
+
+  <div class="empty" id="emptyState">업로드된 파일이 없습니다. 위에 엑셀 파일을 올려주세요.</div>
+</div>
+
+<script>
+const DEFAULT_QUOTA = { "석사": 11, "박사": 12 };
+
+let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
+let degreeOverride = {}; // name -> "석사"/"박사"
+let currentMonth = "전체";
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const resultArea = document.getElementById('resultArea');
+const emptyState = document.getElementById('emptyState');
+
+['dragover','dragleave','drop'].forEach(evt=>{
+  dropzone.addEventListener(evt, e=>{
+    e.preventDefault();
+    if(evt==='dragover') dropzone.classList.add('drag');
+    if(evt==='dragleave'||evt==='drop') dropzone.classList.remove('drag');
+  });
+});
+dropzone.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files[0];
+  if(f) handleFile(f);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files[0]) handleFile(e.target.files[0]);
+});
+document.getElementById('reuploadBtn').addEventListener('click', ()=>fileInput.click());
+
+function findCol(headerRow, candidates){
+  for(let i=0;i<headerRow.length;i++){
+    const h = (headerRow[i]||'').toString().trim();
+    if(candidates.some(c=>h.includes(c))) return i;
+  }
+  return -1;
+}
+
+function handleFile(file){
+  const reader = new FileReader();
+  reader.onload = e => {
+    const data = new Uint8Array(e.target.result);
+    const wb = XLSX.read(data, {type:'array'});
+    rawRows = [];
+    degreeOverride = {};
+
+    wb.SheetNames.forEach(sheetName=>{
+      const sheet = wb.Sheets[sheetName];
+      const grid = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+      if(grid.length < 2) return;
+
+      // 헤더 행 찾기 (날짜/이름 등 키워드가 있는 첫 행)
+      let headerIdx = -1;
+      for(let i=0;i<Math.min(grid.length,5);i++){
+        const rowTxt = grid[i].join(' ');
+        if(rowTxt.includes('날짜') || rowTxt.includes('비고')){ headerIdx = i; break; }
+      }
+      if(headerIdx === -1) return;
+      const header = grid[headerIdx];
+
+      const dateCol = findCol(header, ['날짜']);
+      const nameCol = findCol(header, ['이름']);
+      const checkinCol = findCol(header, ['출근']);
+      const noteCol = findCol(header, ['비고']);
+      if(dateCol === -1 || noteCol === -1) return;
+
+      const personName = nameCol !== -1 ? null : sheetName; // 이름열 없으면 시트명을 이름으로
+
+      for(let r=headerIdx+1; r<grid.length; r++){
+        const row = grid[r];
+        const dateStr = (row[dateCol]||'').toString().trim();
+        if(!dateStr) continue;
+        const m = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+        if(!m) continue;
+        const month = `${m[1]}-${m[2]}`;
+        const name = nameCol !== -1 ? (row[nameCol]||'').toString().trim() || sheetName : personName;
+        const note = (row[noteCol]||'').toString().trim();
+        const hasCheckin = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() !== '' : (note === '');
+        rawRows.push({name, dateStr, month, hasCheckin, note});
+      }
+    });
+
+    if(rawRows.length === 0){
+      alert('인식 가능한 데이터를 찾지 못했어요. "날짜"와 "비고" 컬럼이 있는지 확인해주세요.');
+      return;
+    }
+    buildMonthTabs();
+    render();
+    resultArea.style.display = 'block';
+    emptyState.style.display = 'none';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildMonthTabs(){
+  const months = Array.from(new Set(rawRows.map(r=>r.month))).sort();
+  currentMonth = '전체';
+  const box = document.getElementById('monthTabs');
+  box.innerHTML = '';
+  const allBtn = document.createElement('button');
+  allBtn.className = 'tab-btn active';
+  allBtn.textContent = '전체';
+  allBtn.onclick = ()=>{ currentMonth='전체'; setActiveTab(allBtn); render(); };
+  box.appendChild(allBtn);
+  months.forEach(m=>{
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn';
+    btn.textContent = m;
+    btn.onclick = ()=>{ currentMonth=m; setActiveTab(btn); render(); };
+    box.appendChild(btn);
+  });
+}
+function setActiveTab(activeBtn){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  activeBtn.classList.add('active');
+}
+
+function statFromRows(rows){
+  const normalDays = rows.filter(r=>r.hasCheckin && !r.note).length;
+  const leaveFull = rows.filter(r=>r.note.includes('연차') && !r.note.includes('출장')).length;
+  const leaveHalf = rows.filter(r=>r.note.includes('반차') && !r.note.includes('출장')).length;
+  const trip = rows.filter(r=>r.note.includes('출장')).length;
+  const consumed = leaveFull + leaveHalf*0.5;
+  const attendBase = normalDays + leaveFull + leaveHalf;
+  const attendRate = attendBase>0 ? normalDays/attendBase : (normalDays>0?1:0);
+  return {normalDays, leaveFull, leaveHalf, trip, consumed, attendRate};
+}
+
+// 학기 전체 누적(월 필터 영향 없음) - "결론"용
+function computeConclusionStats(){
+  const names = Array.from(new Set(rawRows.map(r=>r.name))).sort();
+  return names.map(name=>{
+    const rows = rawRows.filter(r=>r.name===name);
+    const s = statFromRows(rows);
+    const degree = degreeOverride[name] || '석사';
+    const quota = DEFAULT_QUOTA[degree];
+    const remain = quota - s.consumed;
+    const rate = quota>0 ? s.consumed/quota : 0;
+    let status='ok', statusLabel='양호';
+    if(rate>=1){ status='over'; statusLabel='배정연차 초과'; }
+    else if(rate>=0.7){ status='warn'; statusLabel='소진 임박'; }
+    return {name, degree, quota, remain, rate, status, statusLabel, ...s};
+  });
+}
+
+// 월별 출석 현황 - 월 탭 필터 반영
+function computeMonthlyStats(){
+  const names = Array.from(new Set(rawRows.map(r=>r.name))).sort();
+  const months = currentMonth==='전체'
+    ? Array.from(new Set(rawRows.map(r=>r.month))).sort()
+    : [currentMonth];
+  const out = [];
+  names.forEach(name=>{
+    months.forEach(month=>{
+      const rows = rawRows.filter(r=>r.name===name && r.month===month);
+      if(rows.length===0) return;
+      out.push({name, month, ...statFromRows(rows)});
+    });
+  });
+  return out;
+}
+
+function render(){
+  const conclusion = computeConclusionStats();
+  renderCards(conclusion);
+  renderConclusion(conclusion);
+  renderMonthly(computeMonthlyStats());
+}
+
+function renderCards(stats){
+  const totalPeople = stats.length;
+  const overCount = stats.filter(s=>s.status==='over').length;
+  const warnCount = stats.filter(s=>s.status==='warn').length;
+  const avgAttend = stats.length ? (stats.reduce((a,s)=>a+s.attendRate,0)/stats.length*100).toFixed(0) : 0;
+  const totalTrip = stats.reduce((a,s)=>a+s.trip,0);
+
+  const cards = [
+    {label:'집계 대상 인원', value:`${totalPeople}명`},
+    {label:'배정연차 초과', value:`${overCount}명`, cls: overCount>0?'red':''},
+    {label:'소진 임박(70%↑)', value:`${warnCount}명`, cls: warnCount>0?'amber':''},
+    {label:'평균 출석률', value:`${avgAttend}%`},
+    {label:'출장 인정 건수(제외)', value:`${totalTrip}건`},
+  ];
+  document.getElementById('summaryCards').innerHTML = cards.map(c=>`
+    <div class="card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls||''}">${c.value}</div>
+    </div>`).join('');
+}
+
+function renderConclusion(stats){
+  const barColor = s => s.status==='over' ? 'var(--red)' : s.status==='warn' ? 'var(--amber)' : 'var(--green)';
+  document.getElementById('conclusionBody').innerHTML = stats.map(s=>{
+    const remainLabel = s.remain>=0 ? `잔여 ${s.remain.toFixed(1)}일` : `초과 ${Math.abs(s.remain).toFixed(1)}일`;
+    const remainColor = s.remain>=0 ? 'var(--navy-2)' : 'var(--red)';
+    const conclusionText = s.status==='over'
+      ? `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과`
+      : `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과 아님`;
+    return `
+    <tr>
+      <td class="name">${s.name}</td>
+      <td>
+        <select class="degree-select" onchange="changeDegree('${s.name}', this.value)">
+          <option value="석사" ${s.degree==='석사'?'selected':''}>석사</option>
+          <option value="박사" ${s.degree==='박사'?'selected':''}>박사</option>
+        </select>
+      </td>
+      <td>${s.normalDays}</td>
+      <td>${s.leaveFull}</td>
+      <td>${s.leaveHalf}</td>
+      <td>${s.trip}</td>
+      <td><strong>${s.consumed.toFixed(1)}</strong></td>
+      <td>${s.quota}</td>
+      <td style="color:${remainColor}; font-weight:700;">${remainLabel}</td>
+      <td>
+        <div class="bar-cell">
+          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(s.rate*100,100)}%; background:${barColor(s)};"></div></div>
+          <span>${(s.rate*100).toFixed(0)}%</span>
+        </div>
+      </td>
+      <td><span class="conclusion-pill ${s.status}" title="${conclusionText}">${s.statusLabel}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderMonthly(rows){
+  document.getElementById('monthlyBody').innerHTML = rows.map(r=>{
+    const pct = Math.round(r.attendRate*100);
+    const barColor = pct>=90 ? 'var(--green)' : pct>=75 ? 'var(--amber)' : 'var(--red)';
+    return `
+    <tr>
+      <td class="name">${r.name}</td>
+      <td>${r.month}</td>
+      <td>
+        <div class="bar-cell">
+          <div class="bar-track" style="width:100px;"><div class="bar-fill" style="width:${pct}%; background:${barColor};"></div></div>
+          <span>${pct}%</span>
+        </div>
+      </td>
+      <td>${r.normalDays}</td>
+      <td>${r.leaveFull}</td>
+      <td>${r.leaveHalf}</td>
+      <td>${r.trip}</td>
+    </tr>`;
+  }).join('');
+}
+
+function changeDegree(name, value){
+  degreeOverride[name] = value;
+  render();
+}
+
+document.getElementById('downloadBtn').addEventListener('click', ()=>{
+  const conclusion = computeConclusionStats();
+  const monthly = computeMonthlyStats();
+  const wb = XLSX.utils.book_new();
+
+  const conclusionData = conclusion.map(s=>({
+    '이름': s.name, '과정': s.degree, '정상출근일': s.normalDays,
+    '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip,
+    '실질 소진': s.consumed, '배정연차': s.quota, '잔여/초과': s.remain,
+    '소진율(%)': Math.round(s.rate*100), '결론': s.statusLabel
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(conclusionData), '학기누적결론');
+
+  const monthlyData = monthly.map(r=>({
+    '이름': r.name, '월': r.month, '출석률(%)': Math.round(r.attendRate*100),
+    '정상출근일': r.normalDays, '연차': r.leaveFull, '반차': r.leaveHalf, '출장(제외)': r.trip
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthlyData), '월별출석현황');
+
+  XLSX.writeFile(wb, `근태대시보드_${currentMonth}.xlsx`);
+});
+</script>
+</body>
+</html>
