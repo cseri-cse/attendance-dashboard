@@ -100,6 +100,7 @@
   .conclusion-pill.ok{background:var(--green-soft); color:var(--green);}
   .conclusion-pill.warn{background:var(--amber-soft); color:var(--amber);}
   .conclusion-pill.over{background:var(--red-soft); color:var(--red);}
+  .conclusion-pill.neutral{background:#EEF0F3; color:var(--muted);}
   .config-warn{font-size:10px; color:var(--amber); margin-top:3px; font-weight:600;}
 </style>
 </head>
@@ -196,7 +197,7 @@
 </div>
 
 <script>
-const DEFAULT_QUOTA = { "석사": 11, "박사": 12 };
+const DEFAULT_QUOTA = { "석사": 11, "박사": 12, "연구원": null }; // null = 배정연차 없음(초과 계산 대상 제외)
 
 let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
 let degreeOverride = {}; // name -> "석사"/"박사" (students.json 기본값 + 세션 중 수동 변경분)
@@ -341,13 +342,15 @@ function computeConclusionStats(){
     const rows = rawRows.filter(r=>r.name===name);
     const s = statFromRows(rows);
     const degree = degreeOverride[name] || studentConfig[name] || '석사';
-    const quota = DEFAULT_QUOTA[degree];
-    const remain = quota - s.consumed;
-    const rate = quota>0 ? s.consumed/quota : 0;
+    const quota = DEFAULT_QUOTA[degree]; // null이면 "연구원" 등 배정연차 없음
+    const noQuota = quota === null || quota === undefined;
+    const remain = noQuota ? null : quota - s.consumed;
+    const rate = noQuota ? 0 : (quota>0 ? s.consumed/quota : 0);
     let status='ok', statusLabel='양호';
-    if(rate>=1){ status='over'; statusLabel='배정연차 초과'; }
+    if(noQuota){ status='neutral'; statusLabel='해당없음'; }
+    else if(rate>=1){ status='over'; statusLabel='배정연차 초과'; }
     else if(rate>=0.7){ status='warn'; statusLabel='소진 임박'; }
-    return {name, degree, quota, remain, rate, status, statusLabel, ...s};
+    return {name, degree, quota, noQuota, remain, rate, status, statusLabel, ...s};
   });
   // 출석률 높은 사람 먼저, 동률이면 소진율 낮은 사람 먼저
   stats.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
@@ -436,11 +439,13 @@ function renderCards(conclusion, monthly){
 function renderConclusion(stats){
   const barColor = s => s.status==='over' ? 'var(--red)' : s.status==='warn' ? 'var(--amber)' : 'var(--green)';
   document.getElementById('conclusionBody').innerHTML = stats.map(s=>{
-    const remainLabel = s.remain>=0 ? `잔여 ${s.remain.toFixed(1)}일` : `초과 ${Math.abs(s.remain).toFixed(1)}일`;
-    const remainColor = s.remain>=0 ? 'var(--navy-2)' : 'var(--red)';
-    const conclusionText = s.status==='over'
-      ? `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과`
-      : `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과 아님`;
+    const remainLabel = s.noQuota ? '해당없음' : (s.remain>=0 ? `잔여 ${s.remain.toFixed(1)}일` : `초과 ${Math.abs(s.remain).toFixed(1)}일`);
+    const remainColor = s.noQuota ? 'var(--muted)' : (s.remain>=0 ? 'var(--navy-2)' : 'var(--red)');
+    const conclusionText = s.noQuota
+      ? '연구원은 배정연차 개념이 없어 소진율을 계산하지 않습니다'
+      : (s.status==='over'
+        ? `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과`
+        : `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과 아님`);
     const attendPct = Math.round(s.attendRate*100);
     const attendColor = attendPct>=90 ? 'var(--green)' : attendPct>=75 ? 'var(--amber)' : 'var(--red)';
     return `
@@ -450,6 +455,7 @@ function renderConclusion(stats){
         <select class="degree-select" onchange="changeDegree('${s.name}', this.value)">
           <option value="석사" ${s.degree==='석사'?'selected':''}>석사</option>
           <option value="박사" ${s.degree==='박사'?'selected':''}>박사</option>
+          <option value="연구원" ${s.degree==='연구원'?'selected':''}>연구원</option>
         </select>
         ${!studentConfig[s.name] ? '<div class="config-warn">설정파일에 없음(기본값)</div>' : ''}
       </td>
@@ -464,13 +470,15 @@ function renderConclusion(stats){
       <td>${s.leaveHalf}</td>
       <td>${s.trip}</td>
       <td><strong>${s.consumed.toFixed(1)}</strong></td>
-      <td>${s.quota}</td>
+      <td>${s.noQuota ? '해당없음' : s.quota}</td>
       <td style="color:${remainColor}; font-weight:700;">${remainLabel}</td>
       <td>
-        <div class="bar-cell">
-          <div class="bar-track"><div class="bar-fill" style="width:${Math.min(s.rate*100,100)}%; background:${barColor(s)};"></div></div>
-          <span>${(s.rate*100).toFixed(0)}%</span>
-        </div>
+        ${s.noQuota
+          ? '<span style="color:var(--muted); font-size:11.5px;">해당없음</span>'
+          : `<div class="bar-cell">
+              <div class="bar-track"><div class="bar-fill" style="width:${Math.min(s.rate*100,100)}%; background:${barColor(s)};"></div></div>
+              <span>${(s.rate*100).toFixed(0)}%</span>
+            </div>`}
       </td>
       <td><span class="conclusion-pill ${s.status}" title="${conclusionText}">${s.statusLabel}</span></td>
     </tr>`;
