@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>연구실 근태 · 연차 소진 대시보드</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --navy:#111827; --navy-2:#1F2937; --blue:#2563EB; --blue-soft:#EFF4FF;
@@ -34,8 +35,8 @@
     padding:34px; text-align:center; cursor:pointer; transition:.15s border-color, .15s background;
   }
   .uploader:hover, .uploader.drag{border-color:var(--blue); background:var(--blue-soft);}
-  .uploader input{display:none;}
-  .uploader .icon{font-size:26px; margin-bottom:8px;}
+  .visually-hidden{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;}
+  .uploader .icon{margin-bottom:10px;}
   .uploader .title{font-weight:600; font-size:14px;}
   .uploader .desc{font-size:12px; color:var(--muted); margin-top:4px; line-height:1.6;}
 
@@ -113,22 +114,28 @@
 
 <div class="wrap">
 
-  <label class="uploader" id="dropzone">
-    <input type="file" id="fileInput" accept=".xlsx,.xls">
-    <div class="icon">📊</div>
+  <div class="uploader" id="dropzone">
+    <input type="file" id="fileInput" accept=".xlsx,.xls" class="visually-hidden">
+    <svg class="icon" width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="12" width="4" height="8" rx="1" fill="#2563EB"/>
+      <rect x="10" y="7" width="4" height="13" rx="1" fill="#1F2937"/>
+      <rect x="17" y="3" width="4" height="17" rx="1" fill="#93A5C4"/>
+    </svg>
     <div class="title">엑셀 파일을 여기로 드래그하거나 클릭해서 업로드</div>
     <div class="desc">탭(시트) 1개 = 연구원 1명 · 비고 열에 "연차" / "반차" / "출장" 텍스트로 구분되어 있으면 자동 인식합니다.</div>
-  </label>
+  </div>
 
   <div id="resultArea" style="display:none;">
     <div class="toolbar">
       <div class="tabs" id="monthTabs"></div>
       <div class="actions">
         <button class="btn" id="reuploadBtn">다른 파일 업로드</button>
+        <button class="btn" id="downloadImageBtn">대시보드 이미지 저장</button>
         <button class="btn primary" id="downloadBtn">엑셀로 다운로드</button>
       </div>
     </div>
 
+    <div id="captureArea">
     <div class="cards" id="summaryCards"></div>
 
     <div class="section-title">
@@ -139,6 +146,7 @@
         <tr>
           <th style="text-align:left; padding-left:16px;">이름</th>
           <th>과정</th>
+          <th>출석률</th>
           <th>정상출근일</th>
           <th>연차 신청</th>
           <th>반차 신청</th>
@@ -175,8 +183,10 @@
       </thead>
       <tbody id="monthlyBody"></tbody>
     </table>
+    </div>
 
     <div class="note">
+      ※ 두 표 모두 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
       ※ 과정(석사/박사) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
@@ -222,6 +232,7 @@ dropzone.addEventListener('drop', e=>{
 fileInput.addEventListener('change', e=>{
   if(e.target.files[0]) handleFile(e.target.files[0]);
 });
+dropzone.addEventListener('click', ()=>fileInput.click());
 document.getElementById('reuploadBtn').addEventListener('click', ()=>fileInput.click());
 
 function findCol(headerRow, candidates){
@@ -323,10 +334,10 @@ function statFromRows(rows){
   return {normalDays, leaveFull, leaveHalf, trip, consumed, attendRate};
 }
 
-// 학기 전체 누적(월 필터 영향 없음) - "결론"용
+// 학기 전체 누적(월 필터 영향 없음) - "결론"용, 출석률 좋은 순으로 정렬
 function computeConclusionStats(){
-  const names = Array.from(new Set(rawRows.map(r=>r.name))).sort();
-  return names.map(name=>{
+  const names = Array.from(new Set(rawRows.map(r=>r.name)));
+  const stats = names.map(name=>{
     const rows = rawRows.filter(r=>r.name===name);
     const s = statFromRows(rows);
     const degree = degreeOverride[name] || studentConfig[name] || '석사';
@@ -338,22 +349,34 @@ function computeConclusionStats(){
     else if(rate>=0.7){ status='warn'; statusLabel='소진 임박'; }
     return {name, degree, quota, remain, rate, status, statusLabel, ...s};
   });
+  // 출석률 높은 사람 먼저, 동률이면 소진율 낮은 사람 먼저
+  stats.sort((a,b)=> b.attendRate - a.attendRate || a.rate - b.rate);
+  return stats;
 }
 
-// 월별 출석 현황 - 월 탭 필터 반영
-function computeMonthlyStats(){
-  const names = Array.from(new Set(rawRows.map(r=>r.name))).sort();
+// 월별 출석 현황 - 월 탭 필터 반영, 학기 누적 순서(출석률 좋은 순)를 그대로 따름
+function computeMonthlyStats(nameOrder){
   const months = currentMonth==='전체'
     ? Array.from(new Set(rawRows.map(r=>r.month))).sort()
     : [currentMonth];
   const out = [];
-  names.forEach(name=>{
-    months.forEach(month=>{
-      const rows = rawRows.filter(r=>r.name===name && r.month===month);
-      if(rows.length===0) return;
-      out.push({name, month, ...statFromRows(rows)});
+  if(currentMonth==='전체'){
+    nameOrder.forEach(name=>{
+      months.forEach(month=>{
+        const rows = rawRows.filter(r=>r.name===name && r.month===month);
+        if(rows.length===0) return;
+        out.push({name, month, ...statFromRows(rows)});
+      });
     });
-  });
+  } else {
+    // 특정 월 선택 시: 해당 월 출석률 좋은 순으로 재정렬
+    nameOrder.forEach(name=>{
+      const rows = rawRows.filter(r=>r.name===name && r.month===currentMonth);
+      if(rows.length===0) return;
+      out.push({name, month:currentMonth, ...statFromRows(rows)});
+    });
+    out.sort((a,b)=> b.attendRate - a.attendRate);
+  }
   return out;
 }
 
@@ -361,7 +384,7 @@ function render(){
   const conclusion = computeConclusionStats();
   renderCards(conclusion);
   renderConclusion(conclusion);
-  renderMonthly(computeMonthlyStats());
+  renderMonthly(computeMonthlyStats(conclusion.map(s=>s.name)));
 }
 
 function renderCards(stats){
@@ -393,6 +416,8 @@ function renderConclusion(stats){
     const conclusionText = s.status==='over'
       ? `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과`
       : `배정 ${s.quota}일 중 ${s.consumed.toFixed(1)}일 소진 → 초과 아님`;
+    const attendPct = Math.round(s.attendRate*100);
+    const attendColor = attendPct>=90 ? 'var(--green)' : attendPct>=75 ? 'var(--amber)' : 'var(--red)';
     return `
     <tr>
       <td class="name">${s.name}</td>
@@ -402,6 +427,12 @@ function renderConclusion(stats){
           <option value="박사" ${s.degree==='박사'?'selected':''}>박사</option>
         </select>
         ${!studentConfig[s.name] ? '<div class="config-warn">설정파일에 없음(기본값)</div>' : ''}
+      </td>
+      <td>
+        <div class="bar-cell">
+          <div class="bar-track"><div class="bar-fill" style="width:${attendPct}%; background:${attendColor};"></div></div>
+          <span>${attendPct}%</span>
+        </div>
       </td>
       <td>${s.normalDays}</td>
       <td>${s.leaveFull}</td>
@@ -448,13 +479,34 @@ function changeDegree(name, value){
   render();
 }
 
+document.getElementById('downloadImageBtn').addEventListener('click', ()=>{
+  const target = document.getElementById('captureArea');
+  const btn = document.getElementById('downloadImageBtn');
+  const originalText = btn.textContent;
+  btn.textContent = '이미지 생성 중...';
+  btn.disabled = true;
+  html2canvas(target, {backgroundColor:'#F7F8FA', scale:2}).then(canvas=>{
+    const link = document.createElement('a');
+    link.download = `근태대시보드_${currentMonth}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }).catch(()=>{
+    alert('이미지 생성에 실패했어요. 잠시 후 다시 시도해주세요.');
+    btn.textContent = originalText;
+    btn.disabled = false;
+  });
+});
+
 document.getElementById('downloadBtn').addEventListener('click', ()=>{
   const conclusion = computeConclusionStats();
-  const monthly = computeMonthlyStats();
+  const monthly = computeMonthlyStats(conclusion.map(s=>s.name));
   const wb = XLSX.utils.book_new();
 
   const conclusionData = conclusion.map(s=>({
-    '이름': s.name, '과정': s.degree, '정상출근일': s.normalDays,
+    '이름': s.name, '과정': s.degree, '출석률(%)': Math.round(s.attendRate*100),
+    '정상출근일': s.normalDays,
     '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip,
     '실질 소진': s.consumed, '배정연차': s.quota, '잔여/초과': s.remain,
     '소진율(%)': Math.round(s.rate*100), '결론': s.statusLabel
