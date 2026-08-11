@@ -186,7 +186,7 @@
           <th style="text-align:left; padding-left:16px;">이름</th>
           <th>과정</th>
           <th>출석률</th>
-          <th>정상출근일</th>
+          <th>정상출근일<br><span style="font-weight:400; font-size:10px;">(출장포함)</span></th>
           <th>연차 신청</th>
           <th>반차 신청</th>
           <th>출장(제외)</th>
@@ -465,7 +465,8 @@ function getPersonStats(name, monthFilter){
   const unrecorded = Math.max(0, required - filled);
   const consumed = c.leaveFull + c.leaveHalf*0.5;
   const attendRate = required>0 ? (c.normalDays + c.trip)/required : ((c.normalDays + c.trip)>0?1:0); // 출장은 결근이 아니라 "다른 곳에서 근무"이므로 출석률 계산엔 정상출근처럼 포함
-  return {...c, unrecorded, consumed, attendRate};
+  const combinedAttend = c.normalDays + c.trip; // 표에서 "정상출근일" 컬럼에 출장 포함해서 보여줄 때 씀
+  return {...c, unrecorded, consumed, attendRate, combinedAttend};
 }
 
 // 학기 전체 누적(월 필터 영향 없음) - "결론"용, 출석률 좋은 순으로 정렬
@@ -599,7 +600,7 @@ function renderConclusion(stats){
           <span>${attendPct}%</span>
         </div>
       </td>
-      <td>${s.normalDays}</td>
+      <td>${s.combinedAttend}</td>
       <td>${s.leaveFull}</td>
       <td>${s.leaveHalf}</td>
       <td>${s.trip}</td>
@@ -730,7 +731,7 @@ document.getElementById('downloadBtn').addEventListener('click', ()=>{
 
   const conclusionData = personRows.map(s=>({
     '이름': s.name, '과정': s.degree, '출석률(%)': Math.round(s.attendRate*100),
-    '정상출근일': s.normalDays,
+    '정상출근일(출장포함)': s.combinedAttend,
     '연차 신청': s.leaveFull, '반차 신청': s.leaveHalf, '출장(제외)': s.trip, '공휴일': s.holiday, '미기록(미출근)': s.unrecorded,
     '실질 소진': s.consumed, '배정연차(학기누적)': s.quota, '잔여/초과(학기누적)': s.remain,
     '소진율(%)(학기누적)': Math.round(s.rate*100), '결론(학기누적)': s.statusLabel
@@ -739,7 +740,7 @@ document.getElementById('downloadBtn').addEventListener('click', ()=>{
 
   const monthlyData = monthly.map(r=>({
     '이름': r.name, '월': r.month, '출석률(%)': Math.round(r.attendRate*100),
-    '정상출근일': r.normalDays, '연차': r.leaveFull, '반차': r.leaveHalf, '출장(제외)': r.trip, '공휴일': r.holiday, '미기록(미출근)': r.unrecorded
+    '정상출근일(출장포함)': r.combinedAttend, '연차': r.leaveFull, '반차': r.leaveHalf, '출장(제외)': r.trip, '공휴일': r.holiday, '미기록(미출근)': r.unrecorded
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthlyData), '월별출석현황');
 
