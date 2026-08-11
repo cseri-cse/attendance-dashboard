@@ -413,10 +413,11 @@ function classifyRows(rows){
   let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0;
   rows.forEach(r=>{
     const note = r.note || '';
+    const isTrip = note.includes('출장') || note.includes('인정'); // "출장", "출장 인정()", "연차 인정()", "출근 인정()" 등 전부 출장(제외)로 집계
     if(note.includes('공휴일')) holiday++;
-    else if(note.includes('반차') && !note.includes('출장')) leaveHalf++;
-    else if(note.includes('연차') && !note.includes('출장')) leaveFull++;
-    else if(note.includes('출장')) trip++;
+    else if(isTrip) trip++;
+    else if(note.includes('반차')) leaveHalf++;
+    else if(note.includes('연차')) leaveFull++;
     else if(r.hasCheckin) normalDays++;
     // 그 외(출근기록도 비고도 없는 빈 행)는 어디에도 안 잡히고, 아래에서 "필요출근일수 - 채워진 일수"로 미기록 처리됨
   });
