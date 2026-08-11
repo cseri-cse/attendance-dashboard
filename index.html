@@ -336,7 +336,9 @@ function handleFile(file){
       const noteCol = findCol(header, ['비고']);
       if(dateCol === -1 || noteCol === -1) return;
 
-      const personName = nameCol !== -1 ? null : sheetName; // 이름열 없으면 시트명을 이름으로
+      // 시트 탭 이름에서 전화번호 등 뒤에 붙은 "_숫자" 부분을 떼고 순수 이름만 추출 (예: "오정주_01038256839" -> "오정주")
+      // 이름 컬럼이 아예 없거나, 특정 행만 이름 칸이 비어있을 때 이 값을 대신 씀
+      const sheetPersonName = sheetName.replace(/[_\-\s]*[0-9][0-9\-\s]*$/,'').trim() || sheetName;
 
       for(let r=headerIdx+1; r<grid.length; r++){
         const row = grid[r];
@@ -347,7 +349,7 @@ function handleFile(file){
         const mm = m[2].padStart(2,'0'), dd = m[3].padStart(2,'0');
         const month = `${m[1]}-${mm}`;
         const dateISO = `${m[1]}-${mm}-${dd}`;
-        const name = nameCol !== -1 ? (row[nameCol]||'').toString().trim() || sheetName : personName;
+        const name = nameCol !== -1 ? ((row[nameCol]||'').toString().trim() || sheetPersonName) : sheetPersonName;
         const note = (row[noteCol]||'').toString().trim();
         const checkinTime = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() : '';
         const checkoutTime = checkoutCol !== -1 ? (row[checkoutCol]||'').toString().trim() : '';
