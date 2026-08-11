@@ -398,6 +398,16 @@ function setActiveTab(activeBtn){
 function pad2(n){ return String(n).padStart(2,'0'); }
 function toLocalISO(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 
+// SheetJS가 "aaa"같은 로케일 요일 서식 코드를 한글로 못 바꿔주는 경우가 있어서,
+// dateISO를 기준으로 우리가 직접 "yyyy-mm-dd (요일)" 형태로 만들어 표시용으로 씀
+const KOR_DOW = ['일','월','화','수','목','금','토'];
+function formatDateWithDow(dateISO){
+  if(!dateISO) return '';
+  const d = new Date(dateISO+'T00:00:00');
+  if(isNaN(d.getTime())) return dateISO;
+  return `${dateISO} (${KOR_DOW[d.getDay()]})`;
+}
+
 // 실제로 존재하는 rows만 세서 분류 (평일 순회 안 함 - 훨씬 단순하고 명확)
 function classifyRows(rows){
   let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0;
@@ -667,7 +677,7 @@ function openDetailModal(name, monthFilter){
         : r.note.includes('출장') ? 'var(--green)'
         : 'inherit';
       return `<tr>
-        <td>${r.dateStr || r.dateISO || ''}</td>
+        <td>${formatDateWithDow(r.dateISO) || r.dateStr || ''}</td>
         <td>${r.checkinTime || (r.hasCheckin ? '✓' : '')}</td>
         <td>${r.checkoutTime || ''}</td>
         <td style="color:${noteColor};">${r.note || (r.hasCheckin ? '' : '-')}</td>
