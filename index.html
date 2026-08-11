@@ -86,8 +86,6 @@
   .bar-cell{display:flex; align-items:center; gap:8px; justify-content:center;}
   .heat-cell{display:inline-flex; align-items:center; justify-content:center; min-width:52px; padding:6px 8px; border-radius:6px; font-size:12px; font-weight:700; cursor:default;}
   .heat-cell.heat-empty{background:#F3F4F6; color:var(--muted); font-weight:500;}
-  #monthlyPivotTable thead th{white-space:nowrap;}
-  #monthlyPivotTable td.name{white-space:nowrap;}
   .heat-cell{cursor:pointer;}
   .heat-cell:hover{outline:2px solid var(--blue); outline-offset:-2px;}
   td.name.clickable{cursor:pointer;}
@@ -107,6 +105,14 @@
     background:var(--navy); color:#fff; font-weight:700; font-size:14px;
   }
   .modal-close{background:none; border:none; color:#fff; font-size:16px; cursor:pointer; padding:4px 8px;}
+  .modal-month-badges{
+    display:flex; gap:6px; flex-wrap:wrap; padding:14px 20px 0;
+  }
+  .month-badge{
+    padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; cursor:pointer;
+    border:1.5px solid transparent;
+  }
+  .month-badge.active{border-color:var(--navy);}
   .modal-summary{
     display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px;
     padding:14px 20px; border-bottom:1px solid var(--line); font-size:12px;
@@ -207,21 +213,10 @@
       <span><span class="dot" style="background:var(--blue);"></span>소진 완료 (정확히 100%)</span>
       <span><span class="dot" style="background:var(--red);"></span>배정연차 초과 (100% 초과)</span>
     </div>
-
-    <div class="section-title" style="margin-top:36px;">
-      <h2>월별 출석률 추이<span>이름별 한 줄로, 월별 출석률을 색상으로 비교 (탭 선택과 무관하게 항상 전체 월 표시)</span></h2>
-    </div>
-    <div id="monthlyPivotWrap" style="overflow-x:auto;">
-      <table id="monthlyPivotTable">
-        <thead id="monthlyPivotHead"></thead>
-        <tbody id="monthlyPivotBody"></tbody>
-      </table>
-    </div>
     </div>
 
     <div class="note">
-      ※ 표의 각 칸은 그 달의 출석률이며, 칸에 마우스를 올리면 정상출근일/연차/반차/출장/미기록 상세 숫자가 보입니다. 진한 초록일수록 출석률이 좋고, 빨강일수록 미기록/결석이 많다는 뜻입니다.<br>
-      ※ 위쪽 "인원별 근태 현황" 표는 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
+      ※ 위쪽 표는 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬). 이름을 클릭하면 그 사람의 월별 출석률과 날짜별 상세 기록을 볼 수 있습니다.<br>
       ※ 출석률·"미기록(미출근)"은 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 숫자를 직접 지정했으면 그 값, 아니면 평일 자동계산) 대비로 계산됩니다. 출석률 = (정상출근일+출장) ÷ 필요출근일수 — 출장은 결근이 아니라 다른 곳에서 근무한 것으로 보고 출석률에 정상출근처럼 포함됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날짜는 <strong>업로드된 데이터에서 자동으로 감지</strong>되어, 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리로 빠지고 필요출근일수 계산에서도 자동으로 제외됩니다 (workdays.json에 숫자를 직접 넣은 달은 예외 — 그 숫자를 그대로 신뢰합니다).<br>
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장" 또는 "인정"이 포함된 신청 건으로, 실질 연차 소진 계산에서는 제외되지만 출석률 계산에는 정상출근처럼 포함됩니다.<br>
       ※ 과정(석사/박사/연구원) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
@@ -237,6 +232,7 @@
       <div id="modalTitle">상세 보기</div>
       <button class="modal-close" onclick="closeDetailModal()">✕</button>
     </div>
+    <div id="modalMonthBadges" class="modal-month-badges"></div>
     <div id="modalSummary" class="modal-summary"></div>
     <div class="modal-table-wrap">
       <table>
@@ -592,7 +588,6 @@ function render(){
   const monthly = computeMonthlyStats(conclusion.map(s=>s.name));
   renderCards(conclusion, monthly);
   renderConclusion(computePersonRows());
-  renderMonthlyPivot(conclusion.map(s=>s.name));
   const titleEl = document.getElementById('conclusionTitle');
   if(titleEl){
     const scopeText = currentMonth==='전체' ? '전체 기간' : currentMonth;
@@ -682,43 +677,53 @@ function renderConclusion(stats){
 }
 
 // 이름별 한 줄 + 월별 컬럼으로 된 히트맵 피벗. 탭 선택(currentMonth)과 무관하게 항상 전체 월을 보여줌
-function renderMonthlyPivot(nameOrder){
-  const months = getAllDataMonths();
-  const head = document.getElementById('monthlyPivotHead');
-  const body = document.getElementById('monthlyPivotBody');
-
-  head.innerHTML = `<tr>
-    <th style="text-align:left; padding-left:16px;">이름</th>
-    ${months.map(m=>`<th>${m}</th>`).join('')}
-  </tr>`;
-
-  body.innerHTML = nameOrder.map(name=>{
-    const cells = months.map(m=>{
-      const rows = rawRows.filter(r=>r.name===name && r.month===m);
-      if(rows.length===0){
-        return `<td><span class="heat-cell heat-empty" onclick="openDetailModal('${escapeAttr(name)}','${m}')">-</span></td>`;
-      }
-      const s = getPersonStats(name, m);
-      const pct = Math.round(s.attendRate*100);
-      let bg, fg;
-      if(pct>=90){ bg='var(--green-soft)'; fg='var(--green)'; }
-      else if(pct>=75){ bg='var(--amber-soft)'; fg='var(--amber)'; }
-      else { bg='var(--red-soft)'; fg='var(--red)'; }
-      const title = `${m} · 정상출근 ${s.normalDays} · 연차 ${s.leaveFull} · 반차 ${s.leaveHalf} · 출장 ${s.trip} · 미기록 ${s.unrecorded} (클릭하면 상세)`;
-      return `<td><span class="heat-cell" title="${title}" style="background:${bg}; color:${fg};" onclick="openDetailModal('${escapeAttr(name)}','${m}')">${pct}%</span></td>`;
-    }).join('');
-    return `<tr><td class="name clickable" onclick="openDetailModal('${escapeAttr(name)}', null)">${name}</td>${cells}</tr>`;
-  }).join('');
-}
-
 function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
 
+let modalCurrentName = null; // 지금 모달에 열려있는 사람 이름 (배지 클릭 시 재사용)
+
 function openDetailModal(name, monthFilter){
+  modalCurrentName = name;
+
+  // 월별 출석률 배지: "전체" + 그 사람이 데이터를 가진 모든 달
+  const months = getAllDataMonths().filter(m => rawRows.some(r=>r.name===name && r.month===m));
+  const badgeHtml = ['전체', ...months].map(m=>{
+    const scope = (m === '전체') ? null : m;
+    const isActive = (scope === monthFilter) || (scope===null && monthFilter===null);
+    if(m === '전체'){
+      return `<span class="month-badge ${isActive?'active':''}" style="background:var(--bg); color:var(--navy-2);" onclick="renderModalScope(null)">전체</span>`;
+    }
+    const s = getPersonStats(name, m);
+    const pct = Math.round(s.attendRate*100);
+    let bg, fg;
+    if(pct>=90){ bg='var(--green-soft)'; fg='var(--green)'; }
+    else if(pct>=75){ bg='var(--amber-soft)'; fg='var(--amber)'; }
+    else { bg='var(--red-soft)'; fg='var(--red)'; }
+    return `<span class="month-badge ${isActive?'active':''}" style="background:${bg}; color:${fg};" onclick="renderModalScope('${m}')">${m} ${pct}%</span>`;
+  }).join('');
+  document.getElementById('modalMonthBadges').innerHTML = badgeHtml;
+
+  renderModalScope(monthFilter);
+  document.getElementById('detailModalOverlay').classList.add('open');
+}
+
+// 모달이 열려있는 상태에서 배지를 눌러 스코프(전체 or 특정월)를 바꿀 때 요약/날짜목록/배지 active 상태만 갱신
+function renderModalScope(monthFilter){
+  const name = modalCurrentName;
+  if(!name) return;
+
   const months = monthFilter ? [monthFilter] : getAllDataMonths();
   const rows = rawRows.filter(r=>r.name===name && months.includes(r.month)).sort((a,b)=> (a.dateISO||'').localeCompare(b.dateISO||''));
   const s = getPersonStats(name, monthFilter);
 
   document.getElementById('modalTitle').textContent = monthFilter ? `${name} · ${monthFilter}` : `${name} · 전체 기간`;
+
+  // 배지 active 상태 갱신
+  document.querySelectorAll('#modalMonthBadges .month-badge').forEach(el=>{
+    const label = el.textContent.trim();
+    const isThisOne = monthFilter ? label.startsWith(monthFilter) : label==='전체';
+    el.classList.toggle('active', isThisOne);
+  });
+
   document.getElementById('modalSummary').innerHTML = `
     <div>정상출근<span class="num" style="color:var(--green);">${s.normalDays}</span></div>
     <div>연차<span class="num">${s.leaveFull}</span></div>
@@ -737,7 +742,7 @@ function openDetailModal(name, monthFilter){
       const noteColor = r.note.includes('공휴일') ? 'var(--blue)'
         : r.note.includes('반차') ? 'var(--amber)'
         : r.note.includes('연차') ? 'var(--muted)'
-        : r.note.includes('출장') ? 'var(--green)'
+        : (r.note.includes('출장') || r.note.includes('인정')) ? 'var(--green)'
         : 'inherit';
       return `<tr>
         <td>${formatDateWithDow(r.dateISO) || r.dateStr || ''}</td>
@@ -747,7 +752,6 @@ function openDetailModal(name, monthFilter){
       </tr>`;
     }).join('');
   }
-  document.getElementById('detailModalOverlay').classList.add('open');
 }
 
 function closeDetailModal(){
