@@ -222,7 +222,7 @@
     <div class="note">
       ※ 표의 각 칸은 그 달의 출석률이며, 칸에 마우스를 올리면 정상출근일/연차/반차/출장/미기록 상세 숫자가 보입니다. 진한 초록일수록 출석률이 좋고, 빨강일수록 미기록/결석이 많다는 뜻입니다.<br>
       ※ 위쪽 "인원별 근태 현황" 표는 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
-      ※ 출석률·"미기록(미출근)"은 이제 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 지정한 값, 없으면 평일 자동계산) 대비로 계산됩니다. 출석률 = (정상출근일+출장) ÷ 필요출근일수 — 출장은 결근이 아니라 다른 곳에서 근무한 것으로 보고 출석률에 정상출근처럼 포함됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날은 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리입니다.<br>
+      ※ 출석률·"미기록(미출근)"은 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 숫자를 직접 지정했으면 그 값, 아니면 평일 자동계산) 대비로 계산됩니다. 출석률 = (정상출근일+출장) ÷ 필요출근일수 — 출장은 결근이 아니라 다른 곳에서 근무한 것으로 보고 출석률에 정상출근처럼 포함됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날짜는 <strong>업로드된 데이터에서 자동으로 감지</strong>되어, 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리로 빠지고 필요출근일수 계산에서도 자동으로 제외됩니다 (workdays.json에 숫자를 직접 넣은 달은 예외 — 그 숫자를 그대로 신뢰합니다).<br>
       ※ "출장(제외)"으로 집계된 건은 비고에 "출장" 또는 "인정"이 포함된 신청 건으로, 실질 연차 소진 계산에서는 제외되지만 출석률 계산에는 정상출근처럼 포함됩니다.<br>
       ※ 과정(석사/박사/연구원) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
@@ -254,6 +254,7 @@ const DEFAULT_QUOTA = { "석사": 11, "박사": 12, "연구원": null }; // null
 
 let rawRows = [];      // {name, dateStr, month, hasCheckin, note}
 let globalMinISO = null, globalMaxISO = null; // 업로드된 전체 데이터의 날짜 범위(모든 사람에게 동일 적용)
+let autoHolidaySet = new Set(); // 비고에 "공휴일"이라고 적힌 날짜들을 데이터에서 자동으로 모아둔 집합(필요출근일수 계산에서 자동 제외됨)
 let degreeOverride = {}; // name -> "석사"/"박사" (students.json 기본값 + 세션 중 수동 변경분)
 let studentConfig = {};  // students.json에서 읽어온 기본 매핑
 let workdaysConfig = {}; // workdays.json에서 읽어온 "yyyy-mm": 이번달 출근해야 하는 날짜 수
@@ -366,6 +367,9 @@ function handleFile(file){
     const allISO = rawRows.map(r=>r.dateISO).filter(Boolean).sort();
     globalMinISO = allISO[0];
     globalMaxISO = allISO[allISO.length-1];
+    autoHolidaySet = new Set(
+      rawRows.filter(r=>r.note && r.note.includes('공휴일') && r.dateISO).map(r=>r.dateISO)
+    );
     buildMonthTabs();
     render();
     resultArea.style.display = 'block';
@@ -427,10 +431,38 @@ function classifyRows(rows){
 }
 
 // 특정 월의 "필요 출근일수": workdays.json에 지정돼 있으면 그 값, 없으면 평일 자동 계산(주말 제외, 전체 데이터 범위로 클램프)
-function getRequiredDays(month){
-  if(workdaysConfig && workdaysConfig[month] !== undefined && workdaysConfig[month] !== null){
-    return Number(workdaysConfig[month]);
+// 평일(토/일 제외) 개수 세기 (rangeStart~rangeEnd, 둘 다 Date 객체, inclusive). excludeISOSet에 있는 날짜는 평일이어도 추가로 제외(공휴일 등)
+function countWeekdaysInRange(rangeStart, rangeEnd, excludeISOSet){
+  if(rangeStart > rangeEnd) return 0;
+  let count = 0;
+  const cursor = new Date(rangeStart);
+  while(cursor <= rangeEnd){
+    const dow = cursor.getDay();
+    if(dow!==0 && dow!==6 && !(excludeISOSet && excludeISOSet.has(toLocalISO(cursor)))) count++;
+    cursor.setDate(cursor.getDate()+1);
   }
+  return count;
+}
+
+// workdays.json의 그 달 값이:
+//  - 숫자면 그대로 필요일수로 사용 (기존 방식, 계속 지원 - 이미 정확한 숫자를 알고 있을 때)
+//  - {"start":"yyyy-mm-dd","end":"yyyy-mm-dd","holidays":[...]} 객체면
+//    그 범위 안에서 토/일 + holidays에 적은 날짜 + 비고에 "공휴일"이라고 적힌 날짜(자동감지)를 뺀 평일 수를 사용
+//  - 지정 안 돼있으면 그 달 전체(전역 데이터 범위로 클램프)에서 토/일 + 비고의 "공휴일"을 자동으로 뺀 평일 수를 계산
+// → 즉 숫자를 직접 지정하지 않는 한, 비고에 "공휴일"이라고 적힌 날짜는 항상 자동으로 필요출근일수에서 빠집니다.
+function getRequiredDays(month){
+  const cfg = workdaysConfig ? workdaysConfig[month] : undefined;
+
+  if(typeof cfg === 'number'){
+    return cfg;
+  }
+  if(cfg && typeof cfg === 'object' && cfg.start && cfg.end){
+    const rangeStart = new Date(cfg.start+'T00:00:00');
+    const rangeEnd = new Date(cfg.end+'T00:00:00');
+    const excludeSet = new Set([...(Array.isArray(cfg.holidays) ? cfg.holidays : []), ...autoHolidaySet]);
+    return countWeekdaysInRange(rangeStart, rangeEnd, excludeSet);
+  }
+
   if(!globalMinISO || !globalMaxISO) return 0;
   const [y,m] = month.split('-').map(Number);
   const monthStart = new Date(y, m-1, 1);
@@ -439,15 +471,7 @@ function getRequiredDays(month){
   const globalEnd = new Date(globalMaxISO+'T00:00:00');
   const rangeStart = monthStart < globalStart ? globalStart : monthStart;
   const rangeEnd = monthEnd > globalEnd ? globalEnd : monthEnd;
-  if(rangeStart > rangeEnd) return 0;
-  let count = 0;
-  const cursor = new Date(rangeStart);
-  while(cursor <= rangeEnd){
-    const dow = cursor.getDay();
-    if(dow!==0 && dow!==6) count++;
-    cursor.setDate(cursor.getDate()+1);
-  }
-  return count;
+  return countWeekdaysInRange(rangeStart, rangeEnd, autoHolidaySet);
 }
 
 function getAllDataMonths(){
