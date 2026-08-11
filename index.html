@@ -354,7 +354,10 @@ function handleFile(file){
         const note = (row[noteCol]||'').toString().trim();
         const checkinTime = checkinCol !== -1 ? (row[checkinCol]||'').toString().trim() : '';
         const checkoutTime = checkoutCol !== -1 ? (row[checkoutCol]||'').toString().trim() : '';
-        const hasCheckin = checkinCol !== -1 ? checkinTime !== '' : (note === '');
+        // 출근 또는 퇴근 중 하나라도 시간이 찍혀있으면 그날 근무한 것으로 인정 (둘 중 하나만 깜빡 태깅한 경우도 있어서)
+        const hasCheckin = (checkinCol !== -1 || checkoutCol !== -1)
+          ? (checkinTime !== '' || checkoutTime !== '')
+          : (note === '');
         rawRows.push({name, dateStr, dateISO, month, hasCheckin, note, checkinTime, checkoutTime});
       }
     });
