@@ -222,8 +222,8 @@
     <div class="note">
       ※ 표의 각 칸은 그 달의 출석률이며, 칸에 마우스를 올리면 정상출근일/연차/반차/출장/미기록 상세 숫자가 보입니다. 진한 초록일수록 출석률이 좋고, 빨강일수록 미기록/결석이 많다는 뜻입니다.<br>
       ※ 위쪽 "인원별 근태 현황" 표는 출석률이 좋은 사람 순으로 정렬됩니다 (소진율 낮은 순 2차 정렬).<br>
-      ※ 출석률·"미기록(미출근)"은 이제 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 지정한 값, 없으면 평일 자동계산) 대비로 계산됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날은 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리입니다.<br>
-      ※ "출장(제외)"으로 집계된 건은 비고에 "출장"이 포함된 신청 건으로, 실질 소진 계산과 출석률 계산에서 모두 제외됩니다.<br>
+      ※ 출석률·"미기록(미출근)"은 이제 "이번 기간에 출근해야 하는 날짜 수"(workdays.json에 지정한 값, 없으면 평일 자동계산) 대비로 계산됩니다. 출석률 = (정상출근일+출장) ÷ 필요출근일수 — 출장은 결근이 아니라 다른 곳에서 근무한 것으로 보고 출석률에 정상출근처럼 포함됩니다. 미기록 = 필요 출근일수 − (정상출근일+연차+반차+출장). 비고에 "공휴일"이라고 적힌 날은 정상출근/연차/미기록 어디에도 안 잡히는 별도 카테고리입니다.<br>
+      ※ "출장(제외)"으로 집계된 건은 비고에 "출장" 또는 "인정"이 포함된 신청 건으로, 실질 연차 소진 계산에서는 제외되지만 출석률 계산에는 정상출근처럼 포함됩니다.<br>
       ※ 과정(석사/박사/연구원) 기본값은 students.json 파일 기준입니다. 화면에서 드롭다운으로 바꾸면 그 세션 동안만 반영되고 새로고침하면 초기화됩니다 — 영구적으로 바꾸려면 students.json 파일을 수정 후 다시 push하세요. 반차는 0.5일로 환산해 소진 계산에 반영됩니다.
     </div>
   </div>
@@ -464,7 +464,7 @@ function getPersonStats(name, monthFilter){
   const required = months.reduce((sum,m)=>sum+getRequiredDays(m), 0);
   const unrecorded = Math.max(0, required - filled);
   const consumed = c.leaveFull + c.leaveHalf*0.5;
-  const attendRate = required>0 ? c.normalDays/required : (c.normalDays>0?1:0);
+  const attendRate = required>0 ? (c.normalDays + c.trip)/required : ((c.normalDays + c.trip)>0?1:0); // 출장은 결근이 아니라 "다른 곳에서 근무"이므로 출석률 계산엔 정상출근처럼 포함
   return {...c, unrecorded, consumed, attendRate};
 }
 
