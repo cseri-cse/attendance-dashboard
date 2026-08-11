@@ -434,18 +434,6 @@ function classifyRows(rows){
 }
 
 // 특정 월의 "필요 출근일수": workdays.json에 지정돼 있으면 그 값, 없으면 평일 자동 계산(주말 제외, 전체 데이터 범위로 클램프)
-// 평일(토/일 제외) 개수 세기 (rangeStart~rangeEnd, 둘 다 Date 객체, inclusive). excludeISOSet에 있는 날짜는 평일이어도 추가로 제외(공휴일 등)
-function countWeekdaysInRange(rangeStart, rangeEnd, excludeISOSet){
-  if(rangeStart > rangeEnd) return 0;
-  let count = 0;
-  const cursor = new Date(rangeStart);
-  while(cursor <= rangeEnd){
-    const dow = cursor.getDay();
-    if(dow!==0 && dow!==6 && !(excludeISOSet && excludeISOSet.has(toLocalISO(cursor)))) count++;
-    cursor.setDate(cursor.getDate()+1);
-  }
-  return count;
-}
 
 // workdays.json의 그 달 값이:
 //  - 숫자면 그대로 필요일수로 사용 (기존 방식, 계속 지원 - 이미 정확한 숫자를 알고 있을 때)
@@ -453,28 +441,28 @@ function countWeekdaysInRange(rangeStart, rangeEnd, excludeISOSet){
 //    그 범위 안에서 토/일 + holidays에 적은 날짜 + 비고에 "공휴일"이라고 적힌 날짜(자동감지)를 뺀 평일 수를 사용
 //  - 지정 안 돼있으면 그 달 전체(전역 데이터 범위로 클램프)에서 토/일 + 비고의 "공휴일"을 자동으로 뺀 평일 수를 계산
 // → 즉 숫자를 직접 지정하지 않는 한, 비고에 "공휴일"이라고 적힌 날짜는 항상 자동으로 필요출근일수에서 빠집니다.
-function getRequiredDays(month){
-  const cfg = workdaysConfig ? workdaysConfig[month] : undefined;
+// 이 달에 실제로 순회해야 할 날짜 범위를 구함: workdays.json에 {start,end}가 있으면 그걸 쓰고(단, 업로드된 데이터의
+// 마지막 날짜 이후는 "아직 안 온 날"이라 미기록으로 잡으면 안 되니 globalMaxISO로 끝을 클램프),
+// 지정 안 돼있으면 그 달 전체를 전역 데이터 범위로 클램프해서 씀. 반환값 없으면(=null) 이 달은 순회 대상 아님.
+function resolveMonthRange(month, cfg){
+  const globalStart = globalMinISO ? new Date(globalMinISO+'T00:00:00') : null;
+  const globalEnd = globalMaxISO ? new Date(globalMaxISO+'T00:00:00') : null;
 
-  if(typeof cfg === 'number'){
-    return cfg;
-  }
+  let rangeStart, rangeEnd;
   if(cfg && typeof cfg === 'object' && cfg.start && cfg.end){
-    const rangeStart = new Date(cfg.start+'T00:00:00');
-    const rangeEnd = new Date(cfg.end+'T00:00:00');
-    const excludeSet = new Set([...(Array.isArray(cfg.holidays) ? cfg.holidays : []), ...autoHolidaySet]);
-    return countWeekdaysInRange(rangeStart, rangeEnd, excludeSet);
+    rangeStart = new Date(cfg.start+'T00:00:00');
+    rangeEnd = new Date(cfg.end+'T00:00:00');
+    if(globalEnd && rangeEnd > globalEnd) rangeEnd = globalEnd; // 아직 업로드 안 된 미래 날짜는 미기록으로 안 잡음
+  } else {
+    if(!globalStart || !globalEnd) return null;
+    const [y,m] = month.split('-').map(Number);
+    const monthStart = new Date(y, m-1, 1);
+    const monthEnd = new Date(y, m, 0);
+    rangeStart = monthStart < globalStart ? globalStart : monthStart;
+    rangeEnd = monthEnd > globalEnd ? globalEnd : monthEnd;
   }
-
-  if(!globalMinISO || !globalMaxISO) return 0;
-  const [y,m] = month.split('-').map(Number);
-  const monthStart = new Date(y, m-1, 1);
-  const monthEnd = new Date(y, m, 0);
-  const globalStart = new Date(globalMinISO+'T00:00:00');
-  const globalEnd = new Date(globalMaxISO+'T00:00:00');
-  const rangeStart = monthStart < globalStart ? globalStart : monthStart;
-  const rangeEnd = monthEnd > globalEnd ? globalEnd : monthEnd;
-  return countWeekdaysInRange(rangeStart, rangeEnd, autoHolidaySet);
+  if(rangeStart > rangeEnd) return null;
+  return {start: rangeStart, end: rangeEnd};
 }
 
 function getAllDataMonths(){
@@ -482,18 +470,62 @@ function getAllDataMonths(){
 }
 
 // name + monthFilter(없으면 전체 기간) 기준으로 정상출근/연차/반차/출장/공휴일/미기록/실질소진/출석률 계산
-// 출석률·미기록은 이제 "필요 출근일수"(workdays.json 또는 평일 자동계산) 대비로 계산됩니다.
+// "숫자만 지정된 달"은 예전처럼 합계 비교 방식(정확한 날짜별 판단 불가)을 쓰고,
+// "날짜범위 지정 또는 미지정(자동)인 달"은 날짜를 하나하나 순회하며 정확히 판단합니다. (추천 방식)
 function getPersonStats(name, monthFilter){
   const months = monthFilter ? [monthFilter] : getAllDataMonths();
-  const rows = rawRows.filter(r=>r.name===name && months.includes(r.month));
-  const c = classifyRows(rows);
-  const filled = c.normalDays + c.leaveFull + c.leaveHalf + c.trip; // 공휴일은 필요일수 자체에서 이미 빠진다고 보고 제외
-  const required = months.reduce((sum,m)=>sum+getRequiredDays(m), 0);
-  const unrecorded = Math.max(0, required - filled);
-  const consumed = c.leaveFull + c.leaveHalf*0.5;
-  const attendRate = required>0 ? (c.normalDays + c.trip)/required : ((c.normalDays + c.trip)>0?1:0); // 출장은 결근이 아니라 "다른 곳에서 근무"이므로 출석률 계산엔 정상출근처럼 포함
-  const combinedAttend = c.normalDays + c.trip; // 표에서 "정상출근일" 컬럼에 출장 포함해서 보여줄 때 씀
-  return {...c, unrecorded, consumed, attendRate, combinedAttend};
+  let normalDays=0, leaveFull=0, leaveHalf=0, trip=0, holiday=0, unrecorded=0, required=0;
+
+  months.forEach(month=>{
+    const cfg = workdaysConfig ? workdaysConfig[month] : undefined;
+
+    if(typeof cfg === 'number'){
+      // 예전 방식: 이 달은 날짜별 판단이 불가능하므로 합계 비교로 대체
+      const rows = rawRows.filter(r=>r.name===name && r.month===month);
+      const c = classifyRows(rows);
+      const filled = c.normalDays + c.leaveFull + c.leaveHalf + c.trip;
+      normalDays += c.normalDays; leaveFull += c.leaveFull; leaveHalf += c.leaveHalf;
+      trip += c.trip; holiday += c.holiday;
+      required += cfg;
+      unrecorded += Math.max(0, cfg - filled);
+      return;
+    }
+
+    const range = resolveMonthRange(month, cfg);
+    if(!range) return;
+    const manualHolidays = new Set(cfg && typeof cfg==='object' && Array.isArray(cfg.holidays) ? cfg.holidays : []);
+    const dateMap = {};
+    rawRows.filter(r=>r.name===name && r.month===month).forEach(r=>{ if(r.dateISO) dateMap[r.dateISO] = r; });
+
+    const cursor = new Date(range.start);
+    while(cursor <= range.end){
+      const dow = cursor.getDay();
+      if(dow!==0 && dow!==6){
+        const iso = toLocalISO(cursor);
+        const row = dateMap[iso];
+        const note = row ? (row.note||'') : '';
+        const isHoliday = note.includes('공휴일') || manualHolidays.has(iso) || autoHolidaySet.has(iso);
+        if(isHoliday){
+          if(note.includes('공휴일')) holiday++;
+          // 필요출근일수 자체에서 빠지므로 required에 더하지 않음
+        } else {
+          required++;
+          const isTrip = note.includes('출장') || note.includes('인정');
+          if(isTrip) trip++;
+          else if(note.includes('반차')) leaveHalf++;
+          else if(note.includes('연차')) leaveFull++;
+          else if(row && row.hasCheckin) normalDays++;
+          else unrecorded++; // 날짜 행이 아예 없거나, 있는데 출근/퇴근/비고가 다 빈 경우
+        }
+      }
+      cursor.setDate(cursor.getDate()+1);
+    }
+  });
+
+  const consumed = leaveFull + leaveHalf*0.5;
+  const attendRate = required>0 ? (normalDays + trip)/required : ((normalDays+trip)>0?1:0); // 출장은 결근이 아니라 "다른 곳에서 근무"이므로 출석률에 정상출근처럼 포함
+  const combinedAttend = normalDays + trip; // 표에서 "정상출근일" 컬럼에 출장 포함해서 보여줄 때 씀
+  return {normalDays, leaveFull, leaveHalf, trip, holiday, unrecorded, consumed, attendRate, combinedAttend};
 }
 
 // 학기 전체 누적(월 필터 영향 없음) - "결론"용, 출석률 좋은 순으로 정렬
