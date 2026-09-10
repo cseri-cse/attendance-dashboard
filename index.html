@@ -195,10 +195,7 @@
           <th>출근기준일</th>
           <th>출근률</th>
           <th>정상출근일<br><span style="font-weight:400; font-size:10px;">(출장포함)</span></th>
-          <th>연차 신청</th>
-          <th>반차 신청</th>
           <th>출장(제외)</th>
-          <th>공휴일</th>
           <th>미기록(미출근)</th>
           <th>배정연차</th>
           <th>소진 연차</th>
@@ -698,10 +695,7 @@ function renderConclusion(stats){
         </div>
       </td>
       <td>${s.combinedAttend}</td>
-      <td>${s.leaveFull}</td>
-      <td>${s.leaveHalf}</td>
       <td>${s.trip}</td>
-      <td>${s.holiday>0 ? s.holiday : '0'}</td>
       <td>${s.unrecorded>0 ? `<span style="color:var(--red); font-weight:700;">${s.unrecorded}</span>` : '0'}</td>
       <td style="white-space:nowrap;">${s.noQuota ? '해당없음' : s.quota}</td>
       <td><strong>${s.consumed.toFixed(1)}</strong></td>
